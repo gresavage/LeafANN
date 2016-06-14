@@ -521,7 +521,7 @@ class LeafNetwork(object):
     def __init__(self, data1D, data2D, targets, train_prop=0.75, num_epochs=1000, stop_err=0.01,
                  d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9, beta_2=0.999,
                  epsilon=1e-8, nonlinearity='tanh', n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3,
-                 freeze_autoencoder=False, verbose=True, plotting=True, verbosity=3, **kwargs):
+                 freeze_autoencoder=False, verbose=True, plotting=True, verbosity=3, nets=None, autoencode=True **kwargs):
         """
         Initializes and trains the networks with the given parameters
             :param data1D:     array-like
@@ -610,22 +610,32 @@ class LeafNetwork(object):
         self._targets   = targets
         self.split_data(train_prop)
         # self.create_layers(n_1Dfilters, n_2Dfilters, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, **kwargs)
-        self.create_layers(8, 24, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, **kwargs)
+        self.create_layers(16, 48, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, **kwargs)
+        self.netname = str(self._n_conv) + "CF" + str(self._n_2Dfilters) + "_" + str(self._n_dense) + "DF" + str(
+            self._n_1Dfilters)
         self.train_network(num_epochs, stop_err, d_stable, n_stable, learning_rate, beta_1, beta_2, epsilon, verbose=verbose, plotting=plotting, verbosity=verbosity, **kwargs)
 
 
 
-    def create_layers(self, n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3, nonlinearity='tanh', freeze_autoencoder=False, **kwargs):
+
+    def create_layers(self, n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3, nonlinearity='tanh', freeze_autoencoder=False, nets=None, pretrain=True, **kwargs):
         """
         Builds 1- and 2-D Convolutional Networks using Theano and Lasagne
         """
         verbose = kwargs.get("verbose", False)
         verbosity = kwargs.get("verbosity", 2)
+        nets = list(nets)
 
-        self.input_var       = T.tensor3('inputs')
-        self.input_var2D     = T.tensor4('2D inputs')
-        self.AE_target_var   = T.tensor3('AE inputs')
-        self.AE_target_var2D = T.tensor4('AE 2D targets')
+        if 0 in nets:
+            self.input_var       = T.tensor3('inputs')
+        if 3 in nets:
+            self.input_var2D     = T.tensor4('2D inputs')
+        if pretrain:
+            if 0 in nets:
+                self.AE_target_var   = T.tensor3('AE inputs')
+            if 3 in nets:
+                self.AE_target_var2D = T.tensor4('AE 2D targets')
+
         self.target_var      = T.matrix('targets')
 
         self._nonlinearity  = self._nonlindict[nonlinearity]
@@ -633,7 +643,6 @@ class LeafNetwork(object):
         self._n_conv        = n_conv
         self._n_dense       = n_dense
         self._n_1Dfilters   = n_1Dfilters
-        # self._n_1Dfilters   = 1
         self._n_2Dfilters   = n_2Dfilters
         self._frozen        = freeze_autoencoder
 
@@ -642,148 +651,244 @@ class LeafNetwork(object):
         filter_size = kwargs.get('filter_size', 3)
 
         if verbose: print "Layering Networks..."
-        self.AE2DLayers     = []
-        self.AELayers       = []
-        self.ConvLayers     = []
-        self.Conv2DLayers   = []
+        if pretrain:
+            if 0 in nets:
+                self.AELayers       = []
+            if 3 in nets:
+                self.AE2DLayers     = []
+        if 0 in nets:
+            self.ConvLayers     = []
+        if 3 in nets:
+            self.Conv2DLayers   = []
 
-        # Input Layer
-        # 1D
-        self.DConvLayers = layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var)
-        self.DenseLayers = layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var)
-        self.AELayers.append(layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var))
-        self.ConvLayers.append(layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var))
-        self.DConvLayers = layers.batch_norm(layers.Conv1DLayer(self.DConvLayers, num_filters=1, filter_size=3, nonlinearity=self._nonlinearity)) # no nonL, 1 filt
-        # 2D
-        self.AE2DLayers.append(layers.InputLayer((None, self._data2D.shape[1], self._data2D.shape[2], self._data2D.shape[3]), input_var=self.input_var2D))
-        self.Conv2DLayers.append(layers.InputLayer((None, 3, 64, 64), input_var=self.input_var2D))
+        """
+        Input Layers
+        """
+        if 0 in nets:
+            self.ConvLayers.append(layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var))
+            if pretrain:
+                self.AELayers.append(layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var))
+        if 1 in nets:
+            self.DConvLayers = layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var)
+            self.DConvLayers = layers.batch_norm(layers.Conv1DLayer(self.DConvLayers, num_filters=1, filter_size=3, nonlinearity=self._nonlinearity)) # no nonL, 1 filt
 
-        # Batch Normalization
-        # 1D
-        self.AELayers.append(layers.BatchNormLayer(self.AELayers[-1]))
-        self.DenseLayers = layers.BatchNormLayer(self.DenseLayers)
-        self.ConvLayers.append(layers.BatchNormLayer(self.ConvLayers[-1], alpha=self.AELayers[-1].alpha, beta=self.AELayers[-1].beta, gamma=self.AELayers[-1].gamma, mean=self.AELayers[-1].mean, inv_std=self.AELayers[-1].inv_std))
+        if 2 in nets:
+            self.DenseLayers = layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var)
+        if 3 in nets:
+            self.Conv2DLayers.append(layers.InputLayer((None, 3, 64, 64), input_var=self.input_var2D))
+            if pretrain:
+                self.AE2DLayers.append(layers.InputLayer((None, self._data2D.shape[1], self._data2D.shape[2], self._data2D.shape[3]), input_var=self.input_var2D))
 
-        # 2D
-        self.AE2DLayers.append(layers.BatchNormLayer(self.AE2DLayers[-1]))
-        self.Conv2DLayers.append(layers.BatchNormLayer(self.Conv2DLayers[-1], alpha=self.AE2DLayers[-1].alpha, beta=self.AE2DLayers[-1].beta, gamma=self.AE2DLayers[-1].gamma, mean=self.AE2DLayers[-1].mean, inv_std=self.AE2DLayers[-1].inv_std))
+        """
+        Batch Normalization
+        """
+        if 0 in nets:
+            self.ConvLayers.append(layers.BatchNormLayer(self.ConvLayers[-1], alpha=self.AELayers[-1].alpha, beta=self.AELayers[-1].beta, gamma=self.AELayers[-1].gamma, mean=self.AELayers[-1].mean, inv_std=self.AELayers[-1].inv_std))
+            if pretrain:
+                self.AELayers.append(layers.BatchNormLayer(self.AELayers[-1]))
+        if 2 in nets:
+            self.DenseLayers = layers.BatchNormLayer(self.DenseLayers)
+        if 3 in nets:
+            self.Conv2DLayers.append(layers.BatchNormLayer(self.Conv2DLayers[-1], alpha=self.AE2DLayers[-1].alpha, beta=self.AE2DLayers[-1].beta, gamma=self.AE2DLayers[-1].gamma, mean=self.AE2DLayers[-1].mean, inv_std=self.AE2DLayers[-1].inv_std))
+            if pretrain:
+                self.AE2DLayers.append(layers.BatchNormLayer(self.AE2DLayers[-1]))
         ###########################################################################################################
-
-        # units = [] # store the output shapes for creating the analagouce dense network
         for c in range(n_conv-1):
-            # Convolutional and Pooling Layers 1
-            # 1D
-            self.AELayers.append(layers.Conv1DLayer(self.AELayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
-            self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, W=self.AELayers[-1].W, b=self.AELayers[-1].b, nonlinearity=self._nonlinearity))
-            print "Output shapes after convolution"
-            print layers.get_output_shape(self.ConvLayers[-1])
-            self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            print layers.get_output_shape(self.DenseLayers)
-            if c is not 0:
+            """
+            Convolutional Layers
+            """
+            if 0 in nets:
+                if pretrain:
+                    self.AELayers.append(layers.Conv1DLayer(self.AELayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
+                    self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, W=self.AELayers[-1].W, b=self.AELayers[-1].b, nonlinearity=self._nonlinearity))
+                else:
+                    self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
+                if 2 in nets:
+                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
+            if c is not 0 and 1 in nets:
                 # DConvLayers already has a convolutional layer from the batch normalization step, so skip on the first iteration.
-                self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=1, filter_size=filter_size, nonlinearity=self._nonlinearity)
+                self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity)
+            if 3 in nets:
+                if pretrain:
+                    self.AE2DLayers.append(layers.Conv2DLayer(self.AE2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
+                    self.Conv2DLayers.append(layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, W=self.AE2DLayers[-1].W, b=self.AE2DLayers[-1].b, nonlinearity=self._nonlinearity))
+                else:
+                    self.Conv2DLayers.append(layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
+            if verbose:
+                print "Output shapes after convolution"
+                if 0 in nets:
+                    print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                    if 2 in nets:
+                        print "MLP: ", layers.get_output_shape(self.DenseLayers)
+                if 3 in nets:
+                    print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
+                print
 
-            print "Output shapes after pooling"
-            self.AELayers.append(layers.MaxPool1DLayer(self.AELayers[-1], pool_size=pool_size))
-            self.ConvLayers.append(layers.MaxPool1DLayer(self.ConvLayers[-1], pool_size=pool_size))
-            print layers.get_output_shape(self.ConvLayers[-1])
-            self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            print layers.get_output_shape(self.DenseLayers)
-            # units.append[layers.get_output_shape(self.ConvLayers[-1])]
-            self.DConvLayers = layers.MaxPool1DLayer(self.DConvLayers, pool_size=pool_size)
-
-            # 2D
-            self.AE2DLayers.append(layers.Conv2DLayer(self.AE2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
-            self.Conv2DLayers.append(layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, W=self.AE2DLayers[-1].W, b=self.AE2DLayers[-1].b, nonlinearity=self._nonlinearity)) # no nonL, 3 filt
-
-            self.AE2DLayers.append(layers.MaxPool2DLayer(self.AE2DLayers[-1], pool_size=pool_size))
-            self.Conv2DLayers.append(layers.MaxPool2DLayer(self.Conv2DLayers[-1], pool_size=pool_size))
-
-            if freeze_autoencoder:
-                self.ConvLayers[-1].params[self.ConvLayers[-1].W].remove("trainable")
-                self.ConvLayers[-1].params[self.ConvLayers[-1].b].remove("trainable")
-                self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].W].remove("trainable")
-                self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].b].remove("trainable")
+            """
+            Max Pooling Layers
+            """
+            if pretrain:
+                if 0 in nets:
+                    self.AELayers.append(layers.MaxPool1DLayer(self.AELayers[-1], pool_size=pool_size))
+                if 3 in nets:
+                    self.AE2DLayers.append(layers.MaxPool2DLayer(self.AE2DLayers[-1], pool_size=pool_size))
+            if 0 in nets:
+                self.ConvLayers.append(layers.MaxPool1DLayer(self.ConvLayers[-1], pool_size=pool_size))
+                if 2 in nets:
+                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
+            if 1 in nets:
+                self.DConvLayers = layers.MaxPool1DLayer(self.DConvLayers, pool_size=pool_size)
+            if 3 in nets:
+                self.Conv2DLayers.append(layers.MaxPool2DLayer(self.Conv2DLayers[-1], pool_size=pool_size))
+            if verbose:
+                print "Output shapes after pooling"
+                if 0 in nets:
+                    print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                    if 2 in nets:
+                        print "MLP: ", layers.get_output_shape(self.DenseLayers)
+                if 3 in nets:
+                    print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
+                print
+            if pretrain and freeze_autoencoder:
+                if 0 in nets:
+                    self.ConvLayers[-1].params[self.ConvLayers[-1].W].remove("trainable")
+                    self.ConvLayers[-1].params[self.ConvLayers[-1].b].remove("trainable")
+                if 3 in nets:
+                    self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].W].remove("trainable")
+                    self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].b].remove("trainable")
             ###########################################################################################################
+            """
+            Last Convolutional Layers
+            """
+            if 0 in nets:
+                if pretrain:
+                    self.AELayers.append(layers.Conv1DLayer(self.AELayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
+                    self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, W=self.AELayers[-1].W, b=self.AELayers[-1].b, nonlinearity=self._nonlinearity))
+                else:
+                    self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
+                if 2 in nets:
+                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
+            if 3 in nets:
+                if pretrain:
+                    self.AE2DLayers.append(layers.Conv2DLayer(self.AE2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
+                    self.Conv2DLayers.append( layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, W=self.AE2DLayers[-1].W, b=self.AE2DLayers[-1].b, nonlinearity=self._nonlinearity))
+                else:
+                    self.Conv2DLayers.append( layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
+            if verbose:
+                print "Output shapes after convolution"
+                if 0 in nets:
+                    print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                    if 2 in nets:
+                        print "MLP: ", layers.get_output_shape(self.DenseLayers)
+                if 1 in nets:
+                    self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=1, filter_size=filter_size, nonlinearity=self._nonlinearity)
+                if 3 in nets:
+                    print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
+                print
 
-            # Convolutional and Pooling Layers output
-            #  1D
-            self.AELayers.append(layers.Conv1DLayer(self.AELayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
-            self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, W=self.AELayers[-1].W, b=self.AELayers[-1].b, nonlinearity=self._nonlinearity))
-            print "Output shapes after convolution"
-            print layers.get_output_shape(self.ConvLayers[-1])
-            self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            print layers.get_output_shape(self.DenseLayers)
-            self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=1, filter_size=filter_size, nonlinearity=self._nonlinearity)
+            """
+            Last Max Pooling Layers
+            """
+            if pretrain:
+                if 0 in nets:
+                    self.AELayers.append(layers.MaxPool1DLayer(self.AELayers[-1], pool_size=pool_size))
+                if 3 in nets:
+                    self.AE2DLayers.append(layers.MaxPool2DLayer(self.AE2DLayers[-1], pool_size=pool_size))
+            if 0 in nets:
+                self.ConvLayers.append(layers.MaxPool1DLayer(self.ConvLayers[-1], pool_size=pool_size))
+                if 2 in nets:
+                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
+            if 1 in nets:
+                self.DConvLayers = layers.MaxPool1DLayer(self.DConvLayers, pool_size=pool_size)
+            if 3 in nets:
+                self.Conv2DLayers.append(layers.MaxPool2DLayer(self.Conv2DLayers[-1], pool_size=pool_size))
+            if verbose:
+                print "Output shapes after pooling"
+                if 0 in nets:
+                    print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                    if 2 in nets:
+                        print "MLP: ", layers.get_output_shape(self.DenseLayers)
+                if 3 in nets:
+                    print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
+                print
 
-            self.AELayers.append(layers.MaxPool1DLayer(self.AELayers[-1], pool_size=pool_size))
-            self.ConvLayers.append(layers.MaxPool1DLayer(self.ConvLayers[-1], pool_size=pool_size))
-            print "Output shapes after pooling"
-            print layers.get_output_shape(self.ConvLayers[-1])
-            self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            print layers.get_output_shape(self.DenseLayers)
-            self.DConvLayers = layers.MaxPool1DLayer(self.DConvLayers, pool_size=pool_size)
-
-            # 2D
-            self.AE2DLayers.append(layers.Conv2DLayer(self.AE2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
-            self.Conv2DLayers.append(layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, W=self.AE2DLayers[-1].W, b=self.AE2DLayers[-1].b, nonlinearity=self._nonlinearity))
-
-            self.AE2DLayers.append(layers.MaxPool2DLayer(self.AE2DLayers[-1], pool_size=pool_size))
-            self.Conv2DLayers.append(layers.MaxPool2DLayer(self.Conv2DLayers[-1], pool_size=pool_size))
-
-            # Add Decoding Layers
-            down = len(self.AELayers)
-            for i in range(down-1):
-                self.AELayers.append(layers.InverseLayer(self.AELayers[-1], self.AELayers[down - 1 - i]))
-                self.AE2DLayers.append(layers.InverseLayer(self.AE2DLayers[-1], self.AE2DLayers[down - 1 - i]))
-
-            if freeze_autoencoder:
-                self.ConvLayers[-1].params[self.ConvLayers[-1].W].remove("trainable")
-                self.ConvLayers[-1].params[self.ConvLayers[-1].b].remove("trainable")
-                self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].W].remove("trainable")
-                self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].b].remove("trainable")
+            if pretrain:
+                # Add Decoding Layers
+                down = len(self.AELayers)
+                for i in range(down-1):
+                    if 0 in nets:
+                        self.AELayers.append(layers.InverseLayer(self.AELayers[-1], self.AELayers[down - 1 - i]))
+                    if 3 in nets:
+                        self.AE2DLayers.append(layers.InverseLayer(self.AE2DLayers[-1], self.AE2DLayers[down - 1 - i]))
+                if freeze_autoencoder:
+                    if 0 in nets:
+                        self.ConvLayers[-1].params[self.ConvLayers[-1].W].remove("trainable")
+                        self.ConvLayers[-1].params[self.ConvLayers[-1].b].remove("trainable")
+                    if 3 in nets:
+                        self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].W].remove("trainable")
+                        self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].b].remove("trainable")
             ###########################################################################################################
 
             # Dense Layer 1
-            self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=2*layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
-            self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.ConvLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.ConvLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            print "Dense output shapes"
-            print layers.get_output_shape(self.DConvLayers)
-            self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
-            print layers.get_output_shape(self.DenseLayers)
+            if 0 in nets:
+                self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.ConvLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
+                self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.ConvLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
+                if 2 in nets:
+                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
+            if 1 in nets:
+                self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=2*layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
+            if 3 in nets:
+                self.Conv2DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.Conv2DLayers[-1])[-1], nonlinearity=self._nonlinearity)
+                self.Conv2DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.Conv2DLayers[-1])[-1], nonlinearity=self._nonlinearity)
 
-            self.Conv2DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.Conv2DLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            self.Conv2DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.Conv2DLayers[-1])[-1], nonlinearity=self._nonlinearity)
+            if verbose:
+                print "Dense output shapes"
+                if 0 in nets:
+                    print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                    if 2 in nets:
+                        print "MLP: ", layers.get_output_shape(self.DenseLayers)
+                if 3 in nets:
+                    print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
+                print
 
             for d in range(n_dense-2):
-                # Dense Layer 2
-                self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1]/2, nonlinearity=self._nonlinearity)
-                self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DScaleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv1DScaleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
-                print "Dense output shapes"
-                print layers.get_output_shape(self.DConvLayers)
-                self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
-                print layers.get_output_shape(self.DenseLayers)
-                self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DAngleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv1DAngleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
+                if 0 in nets:
+                    self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DScaleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv1DScaleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
+                    self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DAngleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv1DAngleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
+                    if 2 in nets:
+                        self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
+                if 1 in nets:
+                    self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1]/2, nonlinearity=self._nonlinearity)
+                if 3 in nets:
+                    self.Conv2DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DScaleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv2DScaleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
+                    self.Conv2DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DAngleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv2DAngleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
+                if verbose:
+                    print "Dense output shapes"
+                    if 0 in nets:
+                        print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                        if 2 in nets:
+                            print "MLP: ", layers.get_output_shape(self.DenseLayers)
+                    if 3 in nets:
+                        print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
+                    print
 
-                self.Conv2DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DScaleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv2DScaleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
-                self.Conv2DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DAngleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv2DAngleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
-
-            # Output Layer
-            # 1D
-            self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=2, nonlinearity=self._nonlinearity)
-            self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=2, nonlinearity=self._nonlinearity)
-            self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DScaleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
-            self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DAngleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
-
-            # 2D
-            self.Conv2DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DScaleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
-            self.Conv2DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DAngleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
-
-            # Merge the outputs into a single network
-            self.ConvLayers = layers.ConcatLayer([self.Conv1DAngleNetLayers, self.Conv1DScaleNetLayers])
-            self.Conv2DLayers = (layers.ConcatLayer([self.Conv2DAngleNetLayers, self.Conv2DScaleNetLayers]))
-
+            """
+            Output Layer
+            """
+            if 0 in nets:
+                self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DScaleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
+                self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DAngleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
+                # Merge the outputs into a single network
+                self.ConvLayers = layers.ConcatLayer([self.Conv1DAngleNetLayers, self.Conv1DScaleNetLayers])
+                if 2 in nets:
+                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=2, nonlinearity=self._nonlinearity)
+            if 1 in nets:
+                self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=2, nonlinearity=self._nonlinearity)
+            if 3 in nets:
+                self.Conv2DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DScaleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
+                self.Conv2DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DAngleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
+                # Merge the outputs into a single network
+                self.Conv2DLayers = (layers.ConcatLayer([self.Conv2DAngleNetLayers, self.Conv2DScaleNetLayers]))
             if verbose:
                 print "Done"
             print
@@ -828,6 +933,7 @@ class LeafNetwork(object):
         verbose = kwargs.get('verbose', False)
         verbosity = kwargs.get('verbosity', 3)
         plotting = kwargs.get('plotting', False)
+        save_plots = kwargs.get('save_plots', True)
 
         num_epochs = int(num_epochs)
         self.d_stable = d_stable
@@ -1142,8 +1248,8 @@ class LeafNetwork(object):
             print "##"*50
             print "##"*50
 
-        if plotting:
-            plt.title("MLP and 1-D Unpretrained Convolutional Network Training and Validation Error")
+        if plotting or save_plots:
+            plt.title("MLP and 1-D Unpretrained Convolutional\nNetwork Training and Validation Error")
             plt.plot(DConvErr, 'g', label='Convolutional, Training')
             plt.plot(DConvValErr, 'b', label='Convolutional, Validation')
             plt.plot(DenseErr, 'k', label='MLP, Training')
@@ -1151,23 +1257,39 @@ class LeafNetwork(object):
             plt.xlabel("Epoch")
             plt.ylabel("Mean Squared Error")
             plt.legend()
-            plt.show()
+            if plotting:
+                plt.show()
+            if save_plots:
+                dir = os.path.dirname(__file__)
+                name = self.netname+str(time.time())
+                figfile = os.path.join(dir, "../plots/"+name+"MLPconvcompare")
+                plt.savefig(figfile, format="png")
 
-            plt.title("1-D Convolutional Network Training and Validation Error: %r filters" %(self._n_1Dfilters))
+            plt.title("1-D Convolutional Network\nTraining and Validation Error: %r filters" %(self._n_1Dfilters))
             plt.plot(Conv1DErr, 'g', label='Training')
             plt.plot(Conv1DValErr, 'b', label='Validation')
             plt.xlabel("Epoch")
             plt.ylabel("Mean Squared Error")
             plt.legend()
-            plt.show()
+            if plotting:
+                plt.show()
+            if save_plots:
+                figfile = os.path.join(dir, "../plots/"+name+"1Dconv")
+                plt.savefig(figfile, format="png")
 
-            plt.title("2-D Convolutional Network Training and Validation Error: %r filters" %(self._n_2Dfilters))
+
+            plt.title("2-D Convolutional Network\nTraining and Validation Error: %r filters" %(self._n_2Dfilters))
             plt.plot(Conv2DErr, 'g', label='Training')
             plt.plot(Conv2DValErr, 'b', label='Validation')
             plt.xlabel("Epoch")
             plt.ylabel("Mean Squared Error")
             plt.legend()
-            plt.show()
+            if plotting:
+                plt.show()
+            if save_plots:
+                figfile = os.path.join(dir, "../plots/"+name+"2Dconv")
+                plt.savefig(figfile, format="png")
+
 
         self._nets = {0: theano.function([self.input_var], layers.get_output(self.ConvLayers, deterministic=True), name="1D Convolutional Network"),
                       3: theano.function([self.input_var2D], layers.get_output(self.Conv2DLayers, deterministic=True), name="2D Convolutional Network"),
@@ -1324,8 +1446,6 @@ class LeafNetwork(object):
         else:
             error = (np.abs(x[0]-y[0]-epsilon)/np.abs(y[0]+epsilon), np.abs(x[1]-y[1]-epsilon)/np.abs(y[1])+epsilon)
         return error
-
-
     def solve(self, input1D=None, input2D=None, targets=None, network_ids=None, timing=False, batch_process=False, **kwargs):
         """
         :param input1D: ndarray, optional
@@ -1530,7 +1650,6 @@ class LeafNetwork(object):
         # print "Error: ", [(a4[i]-expected[i])/expected[i] for i in range(len(expected))]
         # print
         # return answer, a4
-
     def iterate_minibatches(self, inputs, targets, batchsize, shuffle=False):
         assert len(inputs) == len(targets)
         if shuffle:
@@ -1811,7 +1930,6 @@ class Contour(object):
             img[c] = True
         plt.imshow(img)
         plt.show()
-
     def smooth(self, sigma=1.):
         # self._sigma = kwargs.get('sigma', 1.)
         self._sigma = sigma
