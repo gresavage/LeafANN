@@ -506,22 +506,33 @@ class TrainingData:
         return data, targets, weights
 
 class LeafNetwork(object):
-    def split_data(self, train_prop=0.75, verbose=False, **kwargs):
+    def split_data(self, train_prop=0.75, shuffle=True, verbose=False, **kwargs):
         """Splits the data into train_prop% training and 1-train_prop% validation data"""
+
         if verbose:
             print "Splitting Data..."
-        inx     = int(train_prop*len(self._data1D))
-        self.X_train, self.y_train  = self._data1D[:inx], self._targets[:inx]
-        self.X_train2D = self._data2D[:inx]
-        self.X_val, self.y_val      = self._data1D[inx:], self._targets[inx:]
-        self.X_val2D = self._data2D[inx:]
+
+        indices = np.arange(len(self._data1D))
+        inx = int(train_prop*len(self._data1D))
+
+        if shuffle:
+            np.random.shuffle(indices)
+
+        train_excerpt = indices[:inx]
+        val_excerpt = indices[inx:]
+
+        self.X_train, self.y_train  = self._data1D[train_excerpt], self._targets[train_excerpt]
+        self.X_train2D = self._data2D[train_excerpt]
+        self.X_val, self.y_val      = self._data1D[val_excerpt], self._targets[val_excerpt]
+        self.X_val2D = self._data2D[val_excerpt]
+
         if verbose:
             print "Done"
             print
     def __init__(self, data1D, data2D, targets, train_prop=0.75, num_epochs=1000, stop_err=0.01,
                  d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9, beta_2=0.999,
                  epsilon=1e-8, nonlinearity='tanh', n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3,
-                 freeze_autoencoder=False, verbose=True, plotting=True, verbosity=3, nets=None, autoencode=True **kwargs):
+                 freeze_autoencoder=False, verbose=True, plotting=True, verbosity=3, shuffle=True, pretrain=True, nets=None, name=None, save_plots=True, **kwargs):
         """
         Initializes and trains the networks with the given parameters
             :param data1D:     array-like
@@ -574,12 +585,33 @@ class LeafNetwork(object):
                             Number of dense, fully connected layers the networks should have. Must be at least 2 in
                             order to ensure accuracy. Default is 3.
             :param freeze_autoencoder: Bool, optional
-                            Whether or not to freeze the autoencoding layers after pretraining. Default is True.
+                            Whether or not to freeze the autoencoding layers after pretraining. Default is True. Useless
+                            unless pretrain is also set to true
+            :param pretrain:Bool,
+                            Whether or not to pretrain the convolutional layers. Use in conjunction with
+                            freeze_autoencoder
+            :param nets:    int, sequence of ints (optional)
+                            What types of nets to build. If not specified, builds all of the following networks which
+                            may later be called using their integer specification:
+                                0: 1-D convolutional network using curvature data as input
+                                1: 1-D convolutional network strictly without pretraining
+                                2: Standard MLP network accepting curvature data as input. Has the same number of layers
+                                and roughly the same hyperparameters as a 1-D convolutional network with one learnable
+                                filter
+                                3: 2-D convolutional network using image data as input
+            :param name:    string, optional
+                            what name to give the network. If specified a name is automatically constructed using
+                            the hyperparameters n_conv, n_1Dfilters, n_2Dfilters, n_dense.
+            :param shuffle: Bool,
+                            Whether to shuffle the training and validation data. Defaults to True.
             :param verbose: Bool, optional
                             Whether or not to print messages to the console. Default is set to True.
             :param plotting: Bool, optional
                             Whether or not to show plots of the training and validation errors for each network after
                             pretraining and training. Default is True.
+            :param save_plots:  Bool
+                            Whether or not to save the plots to a file. Plots saved this way are named after the network
+                            the type of data plotted, and the time at which they were trained.
             :param verbosity: int, optional
                             Set the verbosity level.
                             0: low verbosity
@@ -608,15 +640,20 @@ class LeafNetwork(object):
         self._data1D    = new_data
         self._data2D    = data2D
         self._targets   = targets
-        self.split_data(train_prop)
+        self.split_data(train_prop, shuffle=shuffle)
+
+        self._n_conv = n_conv
+        self._n_dense = n_dense
+        self._n_1Dfilters = n_1Dfilters
+        self._n_2Dfilters = n_2Dfilters
+
+        if name is None:
+            self.__name__ = str(self._n_conv) + "CF" + str(self._n_1Dfilters) + "." + str(self._n_2Dfilters) + "_" + str(self._n_dense) + "D"
+        else:
+            self.__name__ = name
         # self.create_layers(n_1Dfilters, n_2Dfilters, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, **kwargs)
-        self.create_layers(16, 48, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, **kwargs)
-        self.netname = str(self._n_conv) + "CF" + str(self._n_2Dfilters) + "_" + str(self._n_dense) + "DF" + str(
-            self._n_1Dfilters)
-        self.train_network(num_epochs, stop_err, d_stable, n_stable, learning_rate, beta_1, beta_2, epsilon, verbose=verbose, plotting=plotting, verbosity=verbosity, **kwargs)
-
-
-
+        self.create_layers(1, 1, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, nets=nets, pretrain=pretrain, **kwargs)
+        self.train_network(num_epochs, stop_err, d_stable, n_stable, learning_rate, beta_1, beta_2, epsilon, verbose=verbose, plotting=plotting, verbosity=verbosity, save_plots=save_plots, pretrain=pretrain, **kwargs)
 
     def create_layers(self, n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3, nonlinearity='tanh', freeze_autoencoder=False, nets=None, pretrain=True, **kwargs):
         """
@@ -624,18 +661,20 @@ class LeafNetwork(object):
         """
         verbose = kwargs.get("verbose", False)
         verbosity = kwargs.get("verbosity", 2)
-        nets = list(nets)
+        if nets is None:
+            self.__nets__ = [i for i in range(4)]
+        else:
+            self.__nets__ = list(nets)
 
-        if 0 in nets:
+        if 0 in self.__nets__:
             self.input_var       = T.tensor3('inputs')
-        if 3 in nets:
+        if 3 in self.__nets__:
             self.input_var2D     = T.tensor4('2D inputs')
         if pretrain:
-            if 0 in nets:
+            if 0 in self.__nets__:
                 self.AE_target_var   = T.tensor3('AE inputs')
-            if 3 in nets:
+            if 3 in self.__nets__:
                 self.AE_target_var2D = T.tensor4('AE 2D targets')
-
         self.target_var      = T.matrix('targets')
 
         self._nonlinearity  = self._nonlindict[nonlinearity]
@@ -650,65 +689,70 @@ class LeafNetwork(object):
         dropout     = kwargs.get('dropout', 0.5)
         filter_size = kwargs.get('filter_size', 3)
 
-        if verbose: print "Layering Networks..."
+        if verbose:
+            print "Layering Networks..."
+
         if pretrain:
-            if 0 in nets:
+            if 0 in self.__nets__:
                 self.AELayers       = []
-            if 3 in nets:
+            if 3 in self.__nets__:
                 self.AE2DLayers     = []
-        if 0 in nets:
+        if 0 in self.__nets__:
             self.ConvLayers     = []
-        if 3 in nets:
+        if 3 in self.__nets__:
             self.Conv2DLayers   = []
 
         """
         Input Layers
         """
-        if 0 in nets:
-            self.ConvLayers.append(layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var))
+        if 0 in self.__nets__:
+            self.ConvLayers.append(layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var))
             if pretrain:
-                self.AELayers.append(layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var))
-        if 1 in nets:
-            self.DConvLayers = layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var)
+                self.AELayers.append(layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var))
+        if 1 in self.__nets__:
+            self.DConvLayers = layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var)
             self.DConvLayers = layers.batch_norm(layers.Conv1DLayer(self.DConvLayers, num_filters=1, filter_size=3, nonlinearity=self._nonlinearity)) # no nonL, 1 filt
 
-        if 2 in nets:
-            self.DenseLayers = layers.InputLayer((None, 1, self._data1D.shape[-1]), input_var=self.input_var)
-        if 3 in nets:
-            self.Conv2DLayers.append(layers.InputLayer((None, 3, 64, 64), input_var=self.input_var2D))
+        if 2 in self.__nets__:
+            self.DenseLayers = layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var)
+        if 3 in self.__nets__:
+            self.Conv2DLayers.append(layers.InputLayer((None, self._input2D_shape[0], self._input2D_shape[1], self._input2D_shape[2]), input_var=self.input_var2D))
             if pretrain:
-                self.AE2DLayers.append(layers.InputLayer((None, self._data2D.shape[1], self._data2D.shape[2], self._data2D.shape[3]), input_var=self.input_var2D))
+                self.AE2DLayers.append(layers.InputLayer((None, self._input2D_shape[0], self._input2D_shape[1], self._input2D_shape[2]), input_var=self.input_var2D))
 
         """
         Batch Normalization
         """
-        if 0 in nets:
-            self.ConvLayers.append(layers.BatchNormLayer(self.ConvLayers[-1], alpha=self.AELayers[-1].alpha, beta=self.AELayers[-1].beta, gamma=self.AELayers[-1].gamma, mean=self.AELayers[-1].mean, inv_std=self.AELayers[-1].inv_std))
+        if 0 in self.__nets__:
             if pretrain:
                 self.AELayers.append(layers.BatchNormLayer(self.AELayers[-1]))
-        if 2 in nets:
+                self.ConvLayers.append(layers.BatchNormLayer(self.ConvLayers[-1], alpha=self.AELayers[-1].alpha, beta=self.AELayers[-1].beta, gamma=self.AELayers[-1].gamma, mean=self.AELayers[-1].mean, inv_std=self.AELayers[-1].inv_std))
+            else:
+                self.ConvLayers.append(layers.BatchNormLayer(self.ConvLayers[-1]))
+        if 2 in self.__nets__:
             self.DenseLayers = layers.BatchNormLayer(self.DenseLayers)
-        if 3 in nets:
-            self.Conv2DLayers.append(layers.BatchNormLayer(self.Conv2DLayers[-1], alpha=self.AE2DLayers[-1].alpha, beta=self.AE2DLayers[-1].beta, gamma=self.AE2DLayers[-1].gamma, mean=self.AE2DLayers[-1].mean, inv_std=self.AE2DLayers[-1].inv_std))
+        if 3 in self.__nets__:
             if pretrain:
                 self.AE2DLayers.append(layers.BatchNormLayer(self.AE2DLayers[-1]))
-        ###########################################################################################################
+                self.Conv2DLayers.append(layers.BatchNormLayer(self.Conv2DLayers[-1], alpha=self.AE2DLayers[-1].alpha, beta=self.AE2DLayers[-1].beta, gamma=self.AE2DLayers[-1].gamma, mean=self.AE2DLayers[-1].mean, inv_std=self.AE2DLayers[-1].inv_std))
+            else:
+                self.Conv2DLayers.append(layers.BatchNormLayer(self.Conv2DLayers[-1]))
         for c in range(n_conv-1):
             """
             Convolutional Layers
             """
-            if 0 in nets:
+            if 0 in self.__nets__:
                 if pretrain:
                     self.AELayers.append(layers.Conv1DLayer(self.AELayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
                     self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, W=self.AELayers[-1].W, b=self.AELayers[-1].b, nonlinearity=self._nonlinearity))
                 else:
                     self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
-                if 2 in nets:
+                if 2 in self.__nets__:
                     self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            if c is not 0 and 1 in nets:
+            if c is not 0 and 1 in self.__nets__:
                 # DConvLayers already has a convolutional layer from the batch normalization step, so skip on the first iteration.
                 self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity)
-            if 3 in nets:
+            if 3 in self.__nets__:
                 if pretrain:
                     self.AE2DLayers.append(layers.Conv2DLayer(self.AE2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
                     self.Conv2DLayers.append(layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, W=self.AE2DLayers[-1].W, b=self.AE2DLayers[-1].b, nonlinearity=self._nonlinearity))
@@ -716,73 +760,76 @@ class LeafNetwork(object):
                     self.Conv2DLayers.append(layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
             if verbose:
                 print "Output shapes after convolution"
-                if 0 in nets:
+                if 0 in self.__nets__:
                     print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
-                    if 2 in nets:
+                    if 2 in self.__nets__:
                         print "MLP: ", layers.get_output_shape(self.DenseLayers)
-                if 3 in nets:
+                if 3 in self.__nets__:
                     print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
+                    # print "2D AE: ", layers.get_output_shape(self.AE2DLayers[-1])
                 print
 
             """
             Max Pooling Layers
             """
             if pretrain:
-                if 0 in nets:
+                if 0 in self.__nets__:
                     self.AELayers.append(layers.MaxPool1DLayer(self.AELayers[-1], pool_size=pool_size))
-                if 3 in nets:
+                if 3 in self.__nets__:
                     self.AE2DLayers.append(layers.MaxPool2DLayer(self.AE2DLayers[-1], pool_size=pool_size))
-            if 0 in nets:
+            if 0 in self.__nets__:
                 self.ConvLayers.append(layers.MaxPool1DLayer(self.ConvLayers[-1], pool_size=pool_size))
-                if 2 in nets:
+                if 2 in self.__nets__:
                     self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            if 1 in nets:
+            if 1 in self.__nets__:
                 self.DConvLayers = layers.MaxPool1DLayer(self.DConvLayers, pool_size=pool_size)
-            if 3 in nets:
+            if 3 in self.__nets__:
                 self.Conv2DLayers.append(layers.MaxPool2DLayer(self.Conv2DLayers[-1], pool_size=pool_size))
             if verbose:
                 print "Output shapes after pooling"
-                if 0 in nets:
+                if 0 in self.__nets__:
                     print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
-                    if 2 in nets:
+                    if 2 in self.__nets__:
                         print "MLP: ", layers.get_output_shape(self.DenseLayers)
-                if 3 in nets:
+                if 3 in self.__nets__:
                     print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
+                    # print "2D AE: ", layers.get_output_shape(self.AE2DLayers[-1])
                 print
             if pretrain and freeze_autoencoder:
-                if 0 in nets:
+                if 0 in self.__nets__:
                     self.ConvLayers[-1].params[self.ConvLayers[-1].W].remove("trainable")
                     self.ConvLayers[-1].params[self.ConvLayers[-1].b].remove("trainable")
-                if 3 in nets:
+                if 3 in self.__nets__:
                     self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].W].remove("trainable")
                     self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].b].remove("trainable")
             ###########################################################################################################
             """
             Last Convolutional Layers
             """
-            if 0 in nets:
+            if 0 in self.__nets__:
                 if pretrain:
                     self.AELayers.append(layers.Conv1DLayer(self.AELayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
                     self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, W=self.AELayers[-1].W, b=self.AELayers[-1].b, nonlinearity=self._nonlinearity))
                 else:
                     self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
-                if 2 in nets:
+                if 2 in self.__nets__:
                     self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            if 3 in nets:
+            if 3 in self.__nets__:
                 if pretrain:
                     self.AE2DLayers.append(layers.Conv2DLayer(self.AE2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
                     self.Conv2DLayers.append( layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, W=self.AE2DLayers[-1].W, b=self.AE2DLayers[-1].b, nonlinearity=self._nonlinearity))
                 else:
                     self.Conv2DLayers.append( layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
+            if 1 in self.__nets__:
+                self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=1, filter_size=filter_size, nonlinearity=self._nonlinearity)
+
             if verbose:
                 print "Output shapes after convolution"
-                if 0 in nets:
+                if 0 in self.__nets__:
                     print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
-                    if 2 in nets:
+                    if 2 in self.__nets__:
                         print "MLP: ", layers.get_output_shape(self.DenseLayers)
-                if 1 in nets:
-                    self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=1, filter_size=filter_size, nonlinearity=self._nonlinearity)
-                if 3 in nets:
+                if 3 in self.__nets__:
                     print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
                 print
 
@@ -790,25 +837,25 @@ class LeafNetwork(object):
             Last Max Pooling Layers
             """
             if pretrain:
-                if 0 in nets:
+                if 0 in self.__nets__:
                     self.AELayers.append(layers.MaxPool1DLayer(self.AELayers[-1], pool_size=pool_size))
-                if 3 in nets:
+                if 3 in self.__nets__:
                     self.AE2DLayers.append(layers.MaxPool2DLayer(self.AE2DLayers[-1], pool_size=pool_size))
-            if 0 in nets:
+            if 0 in self.__nets__:
                 self.ConvLayers.append(layers.MaxPool1DLayer(self.ConvLayers[-1], pool_size=pool_size))
-                if 2 in nets:
+                if 2 in self.__nets__:
                     self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-            if 1 in nets:
+            if 1 in self.__nets__:
                 self.DConvLayers = layers.MaxPool1DLayer(self.DConvLayers, pool_size=pool_size)
-            if 3 in nets:
+            if 3 in self.__nets__:
                 self.Conv2DLayers.append(layers.MaxPool2DLayer(self.Conv2DLayers[-1], pool_size=pool_size))
             if verbose:
                 print "Output shapes after pooling"
-                if 0 in nets:
+                if 0 in self.__nets__:
                     print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
-                    if 2 in nets:
+                    if 2 in self.__nets__:
                         print "MLP: ", layers.get_output_shape(self.DenseLayers)
-                if 3 in nets:
+                if 3 in self.__nets__:
                     print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
                 print
 
@@ -816,75 +863,75 @@ class LeafNetwork(object):
                 # Add Decoding Layers
                 down = len(self.AELayers)
                 for i in range(down-1):
-                    if 0 in nets:
+                    if 0 in self.__nets__:
                         self.AELayers.append(layers.InverseLayer(self.AELayers[-1], self.AELayers[down - 1 - i]))
-                    if 3 in nets:
+                    if 3 in self.__nets__:
                         self.AE2DLayers.append(layers.InverseLayer(self.AE2DLayers[-1], self.AE2DLayers[down - 1 - i]))
                 if freeze_autoencoder:
-                    if 0 in nets:
+                    if 0 in self.__nets__:
                         self.ConvLayers[-1].params[self.ConvLayers[-1].W].remove("trainable")
                         self.ConvLayers[-1].params[self.ConvLayers[-1].b].remove("trainable")
-                    if 3 in nets:
+                    if 3 in self.__nets__:
                         self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].W].remove("trainable")
                         self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].b].remove("trainable")
             ###########################################################################################################
 
             # Dense Layer 1
-            if 0 in nets:
+            if 0 in self.__nets__:
                 self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.ConvLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
                 self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.ConvLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
-                if 2 in nets:
+                if 2 in self.__nets__:
                     self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
-            if 1 in nets:
+            if 1 in self.__nets__:
                 self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=2*layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
-            if 3 in nets:
+            if 3 in self.__nets__:
                 self.Conv2DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.Conv2DLayers[-1])[-1], nonlinearity=self._nonlinearity)
                 self.Conv2DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.Conv2DLayers[-1])[-1], nonlinearity=self._nonlinearity)
 
             if verbose:
                 print "Dense output shapes"
-                if 0 in nets:
+                if 0 in self.__nets__:
                     print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
-                    if 2 in nets:
+                    if 2 in self.__nets__:
                         print "MLP: ", layers.get_output_shape(self.DenseLayers)
-                if 3 in nets:
+                if 3 in self.__nets__:
                     print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
                 print
 
             for d in range(n_dense-2):
-                if 0 in nets:
+                if 0 in self.__nets__:
                     self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DScaleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv1DScaleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
                     self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DAngleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv1DAngleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
-                    if 2 in nets:
+                    if 2 in self.__nets__:
                         self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
-                if 1 in nets:
+                if 1 in self.__nets__:
                     self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1]/2, nonlinearity=self._nonlinearity)
-                if 3 in nets:
+                if 3 in self.__nets__:
                     self.Conv2DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DScaleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv2DScaleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
                     self.Conv2DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DAngleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv2DAngleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
                 if verbose:
                     print "Dense output shapes"
-                    if 0 in nets:
+                    if 0 in self.__nets__:
                         print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
-                        if 2 in nets:
+                        if 2 in self.__nets__:
                             print "MLP: ", layers.get_output_shape(self.DenseLayers)
-                    if 3 in nets:
+                    if 3 in self.__nets__:
                         print "2D Conv: ", layers.get_output_shape(self.Conv2DLayers[-1])
                     print
 
             """
             Output Layer
             """
-            if 0 in nets:
+            if 0 in self.__nets__:
                 self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DScaleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
                 self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DAngleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
                 # Merge the outputs into a single network
                 self.ConvLayers = layers.ConcatLayer([self.Conv1DAngleNetLayers, self.Conv1DScaleNetLayers])
-                if 2 in nets:
+                if 2 in self.__nets__:
                     self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=2, nonlinearity=self._nonlinearity)
-            if 1 in nets:
+            if 1 in self.__nets__:
                 self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=2, nonlinearity=self._nonlinearity)
-            if 3 in nets:
+            if 3 in self.__nets__:
                 self.Conv2DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DScaleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
                 self.Conv2DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv2DAngleNetLayers, p=dropout), num_units=1, nonlinearity=self._nonlinearity)
                 # Merge the outputs into a single network
@@ -893,7 +940,7 @@ class LeafNetwork(object):
                 print "Done"
             print
 
-    def train_network(self, num_epochs=1000, stop_err=0.01, d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=10e-8, **kwargs):
+    def train_network(self, num_epochs=1000, stop_err=0.01, d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=10e-8, pretrain=True, plotting=False, save_plots=False, **kwargs):
         """
         A function to  be called when the network is ready to be trained.
         :param num_epochs:  int
@@ -919,219 +966,283 @@ class LeafNetwork(object):
                             algorithm.
         :param epsilon:     float
                             A small positive number used by Adam to avoid numerical error and division by 0.
+        :param pretrain:    Bool
+                            whether or not to pretrain the covolutional layers
+        :param plotting:    Bool
+                            Whether to plot the training and validation errors of each network after training has
+                            finished using matplotlib.pyplot module.
+        :param save_plots   Bool
+                            Whether to save the plots to a file using matplotlib.pyplot module.
         :param kwargs:      keywords
-                            Accepts the following keywords:
+                            Some common keywords:
                                     verbose: Bool
                                         Whether to print information to the screen.
                                     verbosity: int
                                         Verbosity level of the printed information. Useless unless 'verbose' is True.
-                                    plotting: Bool
-                                        Whether to plot the training and validation errors of each network after
-                                        training has finished.
         :return:
         """
         verbose = kwargs.get('verbose', False)
         verbosity = kwargs.get('verbosity', 3)
-        plotting = kwargs.get('plotting', False)
-        save_plots = kwargs.get('save_plots', True)
+        format = kwargs.get('format', 'png')
 
         num_epochs = int(num_epochs)
         self.d_stable = d_stable
         self.n_stable = n_stable
-
-        # Create a loss expression for training
-        # 1D
-        AE1DPred    = layers.get_output(self.AELayers[-1])
-        AE1DLoss    = lasagne.objectives.squared_error(AE1DPred, self.AE_target_var)
-        AE1DLoss    = AE1DLoss.mean()
-
-        Conv1DPred  = layers.get_output(self.ConvLayers)
-        Conv1DLoss  = lasagne.objectives.squared_error(Conv1DPred, self.target_var)
-        Conv1DLoss    = Conv1DLoss.mean()
-
-        DConvPred   = layers.get_output(self.DConvLayers)
-        DConvLoss   = lasagne.objectives.squared_error(DConvPred, self.target_var)
-        DConvLoss   = DConvLoss.mean()
-
-        DensePred   = layers.get_output(self.DenseLayers)
-        DenseLoss   = lasagne.objectives.squared_error(DensePred, self.target_var)
-        DenseLoss   = DenseLoss.mean()
-
-        # 2D
-        AE2DPred    = layers.get_output(self.AE2DLayers[-1])
-        AE2DLoss    = lasagne.objectives.squared_error(AE2DPred, self.AE_target_var2D)
-        AE2DLoss    = AE2DLoss.mean()
-
-        Conv2DPred  = layers.get_output(self.Conv2DLayers)
-        Conv2DLoss  = lasagne.objectives.squared_error(Conv2DPred, self.target_var)
-        Conv2DLoss  = Conv2DLoss.mean()
-
-        # Create an update expression for training
-        # 1D
-        AE1DParams      = layers.get_all_params(self.AELayers[-1], trainable=True)
-        AE1DUpdates     = lasagne.updates.adam(AE1DLoss, AE1DParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon, learning_rate=learning_rate)
-
-        Conv1DParams    = layers.get_all_params(self.ConvLayers, trainable=True)
-        Conv1DUpdates   = lasagne.updates.adam(Conv1DLoss, Conv1DParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon, learning_rate=learning_rate)
-
-        DConvParams     = layers.get_all_params(self.DConvLayers, trainable=True)
-        DConvUpdates    = lasagne.updates.adam(DConvLoss, DConvParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon, learning_rate=learning_rate)
-
-        DenseParams     = layers.get_all_params(self.DenseLayers, trainable=True)
-        DenseUpdates    = lasagne.updates.adam(DenseLoss, DenseParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon, learning_rate=learning_rate)
-
-        # 2D
-        AE2DParams          = layers.get_all_params(self.AE2DLayers[-1], trainable=True)
-        AE2DUpdates         = lasagne.updates.adam(AE2DLoss, AE2DParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon, learning_rate=learning_rate)
-
-        Conv2DParams        = layers.get_all_params(self.Conv2DLayers, trainable=True)
-        Conv2DUpdates       = lasagne.updates.adam(Conv2DLoss, Conv2DParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon, learning_rate=learning_rate)
-
-        # Create a loss expression for validation/testing
-        AE1DTest_pred   = layers.get_output(self.AELayers[-1], deterministic=True)
-        AE1DTest_loss   = lasagne.objectives.squared_error(AE1DTest_pred, self.AE_target_var)
-        AE1DTest_loss   = AE1DTest_loss.mean()
-
-        Conv1DTest_pred = layers.get_output(self.ConvLayers, deterministic=True)
-        Conv1DTest_loss = lasagne.objectives.squared_error(Conv1DTest_pred, self.target_var)
-        Conv1DTest_loss = Conv1DTest_loss.mean()
-
-        DConvTest_pred  = layers.get_output(self.DConvLayers, deterministic=True)
-        DConvTest_loss  = lasagne.objectives.squared_error(DConvTest_pred, self.target_var)
-        DConvTest_loss  = DConvTest_loss.mean()
-
-        DenseTest_pred  = layers.get_output(self.DenseLayers, deterministic=True)
-        DenseTest_loss  = lasagne.objectives.squared_error(DenseTest_pred, self.target_var)
-        DenseTest_loss  = DenseTest_loss.mean()
-
-        # 2D
-        AE2DTest_pred     = layers.get_output(self.AE2DLayers[-1], deterministic=True)
-        AE2DTest_loss           = lasagne.objectives.squared_error(AE2DTest_pred, self.AE_target_var2D)
-        AE2DTest_loss           = AE2DTest_loss.mean()
-
-        Conv2DTest_pred   = layers.get_output(self.Conv2DLayers, deterministic=True)
-        Conv2DTest_loss         = lasagne.objectives.squared_error(Conv2DTest_pred, self.target_var)
-        Conv2DTest_loss         = Conv2DTest_loss.mean()
-
-        # Compile a second function computing the validation loss:
-        AE1DVal_fn          = theano.function([self.input_var, self.AE_target_var], AE1DTest_loss)
-        Conv1DVal_fn        = theano.function([self.input_var, self.target_var], Conv1DTest_loss)
-        DConvVal_fn         = theano.function([self.input_var, self.target_var], DConvTest_loss)
-        DenseVal_fn         = theano.function([self.input_var, self.target_var], DenseTest_loss)
-        AE2DVal_fn          = theano.function([self.input_var2D, self.AE_target_var2D], AE2DTest_loss)
-        Conv2DVal_fn        = theano.function([self.input_var2D, self.target_var], Conv2DTest_loss)
-
-        # Create a training function
-        # 1D
-        AE1DTrainer         = theano.function([self.input_var, self.AE_target_var], AE1DLoss, updates=AE1DUpdates)
-        Conv1DTrainer       = theano.function([self.input_var, self.target_var], Conv1DLoss, updates=Conv1DUpdates)
-        DConvTrainer        = theano.function([self.input_var, self.target_var], DConvLoss, updates=DConvUpdates)
-        DenseTrainer        = theano.function([self.input_var, self.target_var], DenseLoss, updates=DenseUpdates)
-
-        # 2D
-        AE2DTrainer         = theano.function([self.input_var2D, self.AE_target_var2D], AE2DLoss, updates=AE2DUpdates)
-        Conv2DTrainer       = theano.function([self.input_var2D, self.target_var], Conv2DLoss, updates=Conv2DUpdates)
-
-        # Initialize Training Variables
-        AE1DErr         = []
-        AE2DErr         = []
-        Conv1DErr       = []
-        Conv2DErr       = []
-        DConvErr        = []
-        DenseErr        = []
-
-        AE1DValErr      = []
-        AE2DValErr      = []
-        Conv1DValErr    = []
-        Conv2DValErr    = []
-        DConvValErr     = []
-        DenseValErr     = []
-
-        AE1DTrain_time      = []
-        AE2DTrain_time      = []
-        Conv1DTrain_time    = []
-        Conv2DTrain_time    = []
-        DConvTrain_time     = []
-        DenseTrain_time     = []
-
-        AE1Dflag            = False
-        AE2Dflag            = False
-        Conv1Dflag          = False
-        Conv2Dflag          = False
-        DConvflag           = False
-        Denseflag           = False
-
+        if plotting or save_plots:
+            from textwrap import fill
         epochs = dict()
+        if pretrain:
+            if 0 in self.__nets__:
+                # Loss expression
+                AE1DPred = layers.get_output(self.AELayers[-1])
+                AE1DLoss = lasagne.objectives.squared_error(AE1DPred, self.AE_target_var)
+                AE1DLoss = AE1DLoss.mean()
 
-        AETrain_time        = time.time()
-        for i in range(num_epochs):
-            if verbose and verbosity >=2:
-                print "##"*50
-                print "Pretraining Epoch %r" %i
-                print "--" * 50
+                # Parameters and updates
+                AE1DParams = layers.get_all_params(self.AELayers[-1], trainable=True)
+                AE1DUpdates = lasagne.updates.adam(AE1DLoss, AE1DParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon,
+                                                   learning_rate=learning_rate)
+
+                # Create a loss expression for validation/testing
+                AE1DTest_pred = layers.get_output(self.AELayers[-1], deterministic=True)
+                AE1DTest_loss = lasagne.objectives.squared_error(AE1DTest_pred, self.AE_target_var)
+                AE1DTest_loss = AE1DTest_loss.mean()
+
+                # Compile a second function computing the validation loss:
+                AE1DVal_fn = theano.function([self.input_var, self.AE_target_var], AE1DTest_loss)
+
+                # Create a training function
+                AE1DTrainer = theano.function([self.input_var, self.AE_target_var], AE1DLoss, updates=AE1DUpdates)
+
+                # Initialize storage variables
+                AE1DErr     = []
+                AE1DValErr  = []
+                AE1DTrain_time  = []
+
+                AE1Dflag = False
+            else:
+                # Will cause the pretraining loop to skip training the 1D autoencoder
+                AE1Dflag = True
+
+            if 3 in self.__nets__:
+                # Loss expression
+                AE2DPred = layers.get_output(self.AE2DLayers[-1])
+                AE2DLoss = lasagne.objectives.squared_error(AE2DPred, self.AE_target_var2D)
+                AE2DLoss = AE2DLoss.mean()
+
+                # Parameters and updates
+                AE2DParams = layers.get_all_params(self.AE2DLayers[-1], trainable=True)
+                AE2DUpdates = lasagne.updates.adam(AE2DLoss, AE2DParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon,
+                                                   learning_rate=learning_rate)
+
+                # Create a loss expression for validation/testing
+                AE2DTest_pred = layers.get_output(self.AE2DLayers[-1], deterministic=True)
+                AE2DTest_loss = lasagne.objectives.squared_error(AE2DTest_pred, self.AE_target_var2D)
+                AE2DTest_loss = AE2DTest_loss.mean()
+
+                # Compile a second function computing the validation loss:
+                AE2DVal_fn = theano.function([self.input_var2D, self.AE_target_var2D], AE2DTest_loss)
+
+                # Create a training function
+                AE2DTrainer = theano.function([self.input_var2D, self.AE_target_var2D], AE2DLoss, updates=AE2DUpdates)
+
+                # Initalize storage variables
+                AE2DErr     = []
+                AE2DValErr  = []
+                AE2DTrain_time  = []
+
+                AE2Dflag = False
+            else:
+                AE2Dflag = True
+
+            AETrain_time        = time.time()
+            for i in range(num_epochs):
+                if verbose and verbosity >=2:
+                    print "##"*50
+                    print "Pretraining Epoch %r" %i
+                    print "--" * 50
+                if not AE1Dflag:
+                    if verbose and verbosity >= 2:
+                        print "Training 1D autoencoder..."
+                    t = time.time()
+                    AE1DErr.append(AE1DTrainer(self.X_train, self.X_train))
+                    AE1DTrain_time.append(time.time()-t)
+                    AE1DValErr.append(AE1DVal_fn(self.X_val, self.X_val))
+                    if AE1DErr[-1] < stop_err:
+                        if verbose and verbosity >= 1:
+                            print "1-D training converged."
+                        epochs.update({"AE1D": i+1})
+                        AE1Dflag    = True
+                    elif self.stablecheck(AE1DErr):
+                        if verbose and verbosity >=1:
+                            print "1-D error converged before training completed."
+                        epochs.update({"AE1D": i+1})
+                        AE1Dflag    = True
+
+                if not AE2Dflag:
+                    if verbose and verbosity >= 2:
+                        print "Training 2D autoencoder..."
+                    t = time.time()
+                    AE2DErr.append(AE2DTrainer(self.X_train2D, self.X_train2D))
+                    AE2DTrain_time.append(time.time()-t)
+                    AE2DValErr.append(AE2DVal_fn(self.X_val2D, self.X_val2D))
+                    if AE2DErr[-1] < stop_err:
+                        if verbose and verbosity >= 1:
+                            print "2-D training converged."
+                        epochs.update({"AE2D": i+1})
+                        AE2Dflag    = True
+                    elif self.stablecheck(AE2DErr):
+                        if verbose and verbosity >= 1:
+                            print "2-D error converged before training completed."
+                        epochs.update({"AE2D": i+1})
+                        AE2Dflag    = True
+                if AE1Dflag and AE2Dflag:
+                    break
+                if verbose: print
+            AETrain_time = time.time() - AETrain_time
             if not AE1Dflag:
-                if verbose and verbosity >= 2:
-                    print "Training 1D autoencoder..."
-                t = time.time()
-                AE1DErr.append(AE1DTrainer(self.X_train, self.X_train))
-                AE1DTrain_time.append(time.time()-t)
-                AE1DValErr.append(AE1DVal_fn(self.X_val, self.X_val))
-                if AE1DErr[-1] < stop_err:
-                    if verbose and verbosity >= 1:
-                        print "1-D training converged."
-                    epochs.update({"AE1D": i+1})
-                    AE1Dflag    = True
-                elif self.stablecheck(AE1DErr):
-                    if verbose and verbosity >=1:
-                        print "1-D error converged before training completed."
-                    epochs.update({"AE1D": i+1})
-                    AE1Dflag    = True
-
+                epochs.update({"AE1D": i+1})
             if not AE2Dflag:
-                if verbose and verbosity >= 2:
-                    print "Training 2D autoencoder..."
-                t = time.time()
-                AE2DErr.append(AE2DTrainer(self.X_train2D, self.X_train2D))
-                AE2DTrain_time.append(time.time()-t)
-                AE2DValErr.append(AE2DVal_fn(self.X_val2D, self.X_val2D))
-                if AE2DErr[-1] < stop_err:
-                    if verbose and verbosity >= 1:
-                        print "2-D training converged."
-                    epochs.update({"AE2D": i+1})
-                    AE2Dflag    = True
-                elif self.stablecheck(AE2DErr):
-                    if verbose and verbosity >= 1:
-                        print "2-D error converged before training completed."
-                    epochs.update({"AE2D": i+1})
-                    AE2Dflag    = True
-            if AE1Dflag and AE2Dflag:
-                break
-            if verbose: print
-        AETrain_time = time.time() - AETrain_time
-        if not AE1Dflag:
-            epochs.update({"AE1D": i+1})
-        if not AE2Dflag:
-            epochs.update({"AE2D": i+1})
-        if verbose and verbosity >= 1:
-            print "##" * 50
-            print "Pretraining Completed"
-            print "Total Time: {:.3f}s".format(AETrain_time)
-            print "--" * 50
-            print "1-D Autoencoder Error: ", AE1DErr[-1]
-            print "1-D Autoencoder Validation Error: ", AE1DValErr[-1]
-            print "Training Time: {:.3f}s".format(np.sum(AE1DTrain_time))
-            print "Training Epochs: ", epochs["AE1D"]
-            print "--"*50
-            print "2-D Autoencoder Error: ", AE2DErr[-1]
-            print "2-D Autoencoder Validation Error: ", AE2DValErr[-1]
-            print "Training Time: {:.3f}s".format(np.sum(AE2DTrain_time))
-            print "Training Epochs: ", epochs["AE2D"]
-            print "##"*50
-            print "##"*50
-            print
-            print
+                epochs.update({"AE2D": i+1})
+            if verbose and verbosity >= 1:
+                print "##" * 50
+                print "Pretraining Completed"
+                print "Total Time: {:.3f}s".format(AETrain_time)
+                print "--" * 50
+                print "1-D Autoencoder Error: ", AE1DErr[-1]
+                print "1-D Autoencoder Validation Error: ", AE1DValErr[-1]
+                print "Training Time: {:.3f}s".format(np.sum(AE1DTrain_time))
+                print "Training Epochs: ", epochs["AE1D"]
+                print "--"*50
+                print "2-D Autoencoder Error: ", AE2DErr[-1]
+                print "2-D Autoencoder Validation Error: ", AE2DValErr[-1]
+                print "Training Time: {:.3f}s".format(np.sum(AE2DTrain_time))
+                print "Training Epochs: ", epochs["AE2D"]
+                print "##"*50
+                print "##"*50
+                print
+                print
 
         NetTrain_time       = time.time()
+        if 0 in self.__nets__:
+            # Loss expression
+            Conv1DPred = layers.get_output(self.ConvLayers)
+            Conv1DLoss = lasagne.objectives.squared_error(Conv1DPred, self.target_var)
+            Conv1DLoss = Conv1DLoss.mean()
+
+            # Parameters and updates
+            Conv1DParams = layers.get_all_params(self.ConvLayers, trainable=True)
+            Conv1DUpdates = lasagne.updates.adam(Conv1DLoss, Conv1DParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon,
+                                                 learning_rate=learning_rate)
+            # Create a loss expression for validation/testing
+            Conv1DTest_pred = layers.get_output(self.ConvLayers, deterministic=True)
+            Conv1DTest_loss = lasagne.objectives.squared_error(Conv1DTest_pred, self.target_var)
+            Conv1DTest_loss = Conv1DTest_loss.mean()
+
+            # Compile a second function computing the validation loss:
+            Conv1DVal_fn = theano.function([self.input_var, self.target_var], Conv1DTest_loss)
+
+            # Create a training function
+            Conv1DTrainer = theano.function([self.input_var, self.target_var], Conv1DLoss, updates=Conv1DUpdates)
+
+            # Initialize storage variables
+            Conv1DErr = []
+            Conv1DValErr = []
+            Conv1DTrain_time = []
+            Conv1DVal_time = []
+
+            Conv1Dflag = False
+        else:
+            Conv1Dflag = True
+
+        if 1 in self.__nets__:
+            # Loss expression
+            DensePred = layers.get_output(self.DenseLayers)
+            DenseLoss = lasagne.objectives.squared_error(DensePred, self.target_var)
+            DenseLoss = DenseLoss.mean()
+
+            # Parameters and updates
+            DenseParams = layers.get_all_params(self.DenseLayers, trainable=True)
+            DenseUpdates = lasagne.updates.adam(DenseLoss, DenseParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon,
+                                                learning_rate=learning_rate)
+
+            # Create a loss expression for validation/testing
+            DenseTest_pred = layers.get_output(self.DenseLayers, deterministic=True)
+            DenseTest_loss = lasagne.objectives.squared_error(DenseTest_pred, self.target_var)
+            DenseTest_loss = DenseTest_loss.mean()
+
+            # Compile a second function computing the validation loss:
+            DenseVal_fn = theano.function([self.input_var, self.target_var], DenseTest_loss)
+            # Create a training function
+            DenseTrainer = theano.function([self.input_var, self.target_var], DenseLoss, updates=DenseUpdates)
+            # Initialize storage variables
+            DenseErr = []
+            DenseValErr = []
+            DenseTrain_time = []
+            DenseVal_time = []
+
+            Denseflag = False
+        else:
+            Denseflag = True
+
+        if 2 in self.__nets__:
+            # Loss expression
+            DConvPred = layers.get_output(self.DConvLayers)
+            DConvLoss = lasagne.objectives.squared_error(DConvPred, self.target_var)
+            DConvLoss = DConvLoss.mean()
+            # Create an update expression for training
+            DConvParams = layers.get_all_params(self.DConvLayers, trainable=True)
+            DConvUpdates = lasagne.updates.adam(DConvLoss, DConvParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon,
+                                                learning_rate=learning_rate)
+
+            # Create a loss expression for validation/testing
+            DConvTest_pred = layers.get_output(self.DConvLayers, deterministic=True)
+            DConvTest_loss = lasagne.objectives.squared_error(DConvTest_pred, self.target_var)
+            DConvTest_loss = DConvTest_loss.mean()
+
+            # Compile a second function computing the validation loss:
+            DConvVal_fn = theano.function([self.input_var, self.target_var], DConvTest_loss)
+
+            # Create a training function
+            DConvTrainer = theano.function([self.input_var, self.target_var], DConvLoss, updates=DConvUpdates)
+
+            # Initialize Storage Variables
+            DConvErr = []
+            DConvValErr = []
+            DConvTrain_time = []
+            DConvVal_time = []
+
+            DConvflag = False
+
+        if 3 in self.__nets__:
+            # Loss expression
+            Conv2DPred = layers.get_output(self.Conv2DLayers)
+            Conv2DLoss = lasagne.objectives.squared_error(Conv2DPred, self.target_var)
+            Conv2DLoss = Conv2DLoss.mean()
+
+            # Parameters and updates
+            Conv2DParams = layers.get_all_params(self.Conv2DLayers, trainable=True)
+            Conv2DUpdates = lasagne.updates.adam(Conv2DLoss, Conv2DParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon,
+                                                 learning_rate=learning_rate)
+            # Create a loss expression for validation/testing
+            Conv2DTest_pred = layers.get_output(self.Conv2DLayers, deterministic=True)
+            Conv2DTest_loss = lasagne.objectives.squared_error(Conv2DTest_pred, self.target_var)
+            Conv2DTest_loss = Conv2DTest_loss.mean()
+
+            # Compile a second function computing the validation loss:
+            Conv2DVal_fn = theano.function([self.input_var2D, self.target_var], Conv2DTest_loss)
+            Conv2DTrainer = theano.function([self.input_var2D, self.target_var], Conv2DLoss, updates=Conv2DUpdates)
+
+            # Initialize Storage Variables
+            Conv2DErr = []
+            Conv2DValErr = []
+            Conv2DTrain_time = []
+            Conv2DVal_time = []
+
+            Conv2Dflag = False
+        else:
+            Conv2Dflag = True
+
         for i in range(num_epochs):
             if verbose and verbosity >= 2:
                 print "##"*50
@@ -1143,7 +1254,9 @@ class LeafNetwork(object):
                 t = time.time()
                 Conv1DErr.append(Conv1DTrainer(self.X_train, self.y_train))
                 Conv1DTrain_time.append(time.time()-t)
+                t = time.time()
                 Conv1DValErr.append(Conv1DVal_fn(self.X_val, self.y_val))
+                Conv1DVal_time.append(time.time()-t)
                 if Conv1DErr[-1] < stop_err:
                     if verbose and verbosity >= 1:
                         print "1-D training converged."
@@ -1160,7 +1273,9 @@ class LeafNetwork(object):
                 t   = time.time()
                 Conv2DErr.append(Conv2DTrainer(self.X_train2D, self.y_train))
                 Conv2DTrain_time.append(time.time()-t)
+                t   = time.time()
                 Conv2DValErr.append(Conv2DVal_fn(self.X_val2D, self.y_val))
+                Conv2DVal_time.append(time.time() - t)
                 if Conv2DErr[-1] < stop_err:
                     if verbose and verbosity >= 1:
                         print "2-D training converged."
@@ -1177,7 +1292,10 @@ class LeafNetwork(object):
                 t   = time.time()
                 DConvErr.append(DConvTrainer(self.X_train, self.y_train))
                 DConvTrain_time.append(time.time()-t)
+                t   = time.time()
                 DConvValErr.append(DConvVal_fn(self.X_val, self.y_val))
+                DConvVal_time.append(time.time() - t)
+
                 if DConvErr[-1] < stop_err:
                     if verbose and verbosity >= 1:
                         print "1-D non-pretrained training converged."
@@ -1194,7 +1312,9 @@ class LeafNetwork(object):
                 t   = time.time()
                 DenseErr.append(DenseTrainer(self.X_train, self.y_train))
                 DenseTrain_time.append(time.time()-t)
+                t   = time.time()
                 DenseValErr.append(DenseVal_fn(self.X_val, self.y_val))
+                DenseVal_time.append(time.time() - t)
                 if DenseErr[-1] < stop_err:
                     if verbose and verbosity >= 1:
                         print "Fully connected training converged."
@@ -1211,14 +1331,18 @@ class LeafNetwork(object):
                 print
 
         NetTrain_time = time.time() - NetTrain_time
-        if not Conv1Dflag:
-            epochs.update({"Conv1D": i+1})
-        if not Conv2Dflag:
-            epochs.update({"Conv2D": i+1})
-        if not DConvflag:
-            epochs.update({"DConv": i+1})
-        if not Denseflag:
-            epochs.update({"Dense": i+1})
+        if 0 in self.__nets__:
+            if not Conv1Dflag:
+                epochs.update({"Conv1D": i+1})
+        if 3 in self.__nets__:
+            if not Conv2Dflag:
+                epochs.update({"Conv2D": i+1})
+        if 1 in self.__nets__:
+            if not DConvflag:
+                epochs.update({"DConv": i+1})
+        if 2 in self.__nets__:
+            if not Denseflag:
+                epochs.update({"Dense": i+1})
         self.epochs = epochs
         if verbose and verbosity >= 1:
             print
@@ -1229,73 +1353,83 @@ class LeafNetwork(object):
             print "Nonlinearity: %r" %(self.nonlinearity)
             print "Frozen Weights: %r" %(self._frozen)
             print "--"*50
-            print "1-D Dual Output Error: ", Conv1DErr[-1]
-            print "Training Time: {:.3f}s".format(np.sum(Conv1DTrain_time))
-            print "Training Epochs: ", epochs["Conv1D"]
-            print "--"*50
-            print "2-D Dual Output Error: ", Conv2DErr[-1]
-            print "Training Time: {:.3f}s".format(np.sum(Conv1DTrain_time))
-            print "Training Epochs: ", epochs["Conv2D"]
-            print "--"*50
-            print "1-D Dumb Dual Output Error: ", DConvErr[-1]
-            print "Training Time: {:.3f}s".format(np.sum(DConvTrain_time))
-            print "Training Epochs: ", epochs["DConv"]
-            print "--"*50
-            print "MLP Output Error: ", DenseErr[-1]
-            print "Training Time: {:.3f}s".format(np.sum(DenseTrain_time))
-            print "Training Epochs: ", epochs["Dense"]
+            if 0 in self.__nets__:
+                print "1-D Error: ", Conv1DErr[-1]
+                print "Training Time: {:.3f}s".format(np.sum(Conv1DTrain_time))
+                print "Training Epochs: ", epochs["Conv1D"]
+                print "--"*50
+            if 3 in self.__nets__:
+                print "2-D Dual Output Error: ", Conv2DErr[-1]
+                print "Training Time: {:.3f}s".format(np.sum(Conv1DTrain_time))
+                print "Training Epochs: ", epochs["Conv2D"]
+                print "--"*50
+            if 1 in self.__nets__:
+                print "1-D Dumb Dual Output Error: ", DConvErr[-1]
+                print "Training Time: {:.3f}s".format(np.sum(DConvTrain_time))
+                print "Training Epochs: ", epochs["DConv"]
+                print "--"*50
+            if 2 in self.__nets__:
+                print "MLP Output Error: ", DenseErr[-1]
+                print "Training Time: {:.3f}s".format(np.sum(DenseTrain_time))
+                print "Training Epochs: ", epochs["Dense"]
             print "##"*50
             print "##"*50
             print "##"*50
 
         if plotting or save_plots:
-            plt.title("MLP and 1-D Unpretrained Convolutional\nNetwork Training and Validation Error")
-            plt.plot(DConvErr, 'g', label='Convolutional, Training')
-            plt.plot(DConvValErr, 'b', label='Convolutional, Validation')
-            plt.plot(DenseErr, 'k', label='MLP, Training')
-            plt.plot(DenseValErr, 'r', label='MLP, Validation')
-            plt.xlabel("Epoch")
-            plt.ylabel("Mean Squared Error")
-            plt.legend()
-            if plotting:
-                plt.show()
-            if save_plots:
-                dir = os.path.dirname(__file__)
-                name = self.netname+str(time.time())
-                figfile = os.path.join(dir, "../plots/"+name+"MLPconvcompare")
-                plt.savefig(figfile, format="png")
+            if 0 in self.__nets__ and 2 in self.__nets__:
+                plt.title(fill("MLP and 1-D Unpretrained Convolutional Network Training and Validation Error", 60))
+                plt.plot(DConvErr, 'g', label='Convolutional, Training')
+                plt.plot(DConvValErr, 'b', label='Convolutional, Validation')
+                plt.plot(DenseErr, 'k', label='MLP, Training')
+                plt.plot(DenseValErr, 'r', label='MLP, Validation')
+                plt.xlabel("Epoch")
+                plt.ylabel("Mean Squared Error")
+                plt.legend()
+                if plotting:
+                    plt.show()
+                if save_plots:
+                    dir = os.path.dirname(__file__)
+                    name = self.netname+str(time.time())
+                    figfile = os.path.join(dir, "../plots/"+name+"MLPconvcompare")
+                    plt.savefig(figfile, format=format)
+            if 0 in self.__nets__:
+                plt.title(fill("1-D Convolutional Network Training and Validation Error: %r filters" %(self._n_1Dfilters), 60))
+                plt.plot(Conv1DErr, 'g', label='Training')
+                plt.plot(Conv1DValErr, 'b', label='Validation')
+                plt.xlabel("Epoch")
+                plt.ylabel("Mean Squared Error")
+                plt.legend()
+                if plotting:
+                    plt.show()
+                if save_plots:
+                    figfile = os.path.join(dir, "../plots/"+name+"1Dconv")
+                    plt.savefig(figfile, format=format)
 
-            plt.title("1-D Convolutional Network\nTraining and Validation Error: %r filters" %(self._n_1Dfilters))
-            plt.plot(Conv1DErr, 'g', label='Training')
-            plt.plot(Conv1DValErr, 'b', label='Validation')
-            plt.xlabel("Epoch")
-            plt.ylabel("Mean Squared Error")
-            plt.legend()
-            if plotting:
-                plt.show()
-            if save_plots:
-                figfile = os.path.join(dir, "../plots/"+name+"1Dconv")
-                plt.savefig(figfile, format="png")
+            if 3 in self.__nets__:
+                plt.title(fill("2-D Convolutional Network\nTraining and Validation Error: %r filters" %(self._n_2Dfilters), 60))
+                plt.plot(Conv2DErr, 'g', label='Training')
+                plt.plot(Conv2DValErr, 'b', label='Validation')
+                plt.xlabel("Epoch")
+                plt.ylabel("Mean Squared Error")
+                plt.legend()
+                if plotting:
+                    plt.show()
+                if save_plots:
+                    figfile = os.path.join(dir, "../plots/"+name+"2Dconv")
+                    plt.savefig(figfile, format=format)
+        # Add the trained networks to self.
+        self.nets = dict()
 
+        if 0 in self.__nets__:
+            self.nets.update({0: theano.function([self.input_var], layers.get_output(self.ConvLayers, deterministic=True), name="1D Convolutional Network")})
+        if 1 in self.__nets__:
+            self.nets.update({1: theano.function([self.input_var], layers.get_output(self.DConvLayers, deterministic=True), name="1D Convolutional Network Sans Pretraining")})
+        if 2 in self.__nets__:
+            self.nets.update({2: theano.function([self.input_var], layers.get_output(self.DenseLayers, deterministic=True), name="MLP Network")})
+        if 3 in self.__nets__:
+            self.nets.update({3: theano.function([self.input_var2D], layers.get_output(self.Conv2DLayers, deterministic=True), name="2D Convolutional Network")})
 
-            plt.title("2-D Convolutional Network\nTraining and Validation Error: %r filters" %(self._n_2Dfilters))
-            plt.plot(Conv2DErr, 'g', label='Training')
-            plt.plot(Conv2DValErr, 'b', label='Validation')
-            plt.xlabel("Epoch")
-            plt.ylabel("Mean Squared Error")
-            plt.legend()
-            if plotting:
-                plt.show()
-            if save_plots:
-                figfile = os.path.join(dir, "../plots/"+name+"2Dconv")
-                plt.savefig(figfile, format="png")
-
-
-        self._nets = {0: theano.function([self.input_var], layers.get_output(self.ConvLayers, deterministic=True), name="1D Convolutional Network"),
-                      3: theano.function([self.input_var2D], layers.get_output(self.Conv2DLayers, deterministic=True), name="2D Convolutional Network"),
-                      5: theano.function([self.input_var], layers.get_output(self.DenseLayers, deterministic=True), name="MLP Network"),
-                      6: theano.function([self.input_var], layers.get_output(self.DConvLayers, deterministic=True), name="1D Convolutional Network Sans Pretraining")
-                      }
         data2, target = self._data2D[:2], self._targets[:2]
         print "Test"
         print "Expected: ", target
@@ -1462,13 +1596,10 @@ class LeafNetwork(object):
                             shape (batch size, 2). See get_error for possible keyword arguments.
         :param network_ids: int, sequence of ints, optional
                             Which networks to use for predictions:
-                                                0: Dual-output 1D convolutional network
-                                                1: Scale-output 1D convolutional network
-                                                2: Angle-output 1D convolutional network
-                                                3: Dual-output 2D convolutional network
-                                                4: Scale-ouput 2D convolutional network
-                                                5: Angle-ouput 2D convolutional network
-                                                6: Non-pretrained 1D convolutional network
+                                                0: 1D convolutional network
+                                                1: 1D convolutional network w/o pretraining
+                                                2: MLP network
+                                                3: 2D convolutional network
                             Not specified:      return predictions from all networks.
                             int:                return only the prediction from the network specified by network_id
                             sequence of ints:   return only the predictions from the networks whose id's are specified
@@ -1525,7 +1656,7 @@ class LeafNetwork(object):
 
         if network_ids is None:
             # network_ids = [i for i in range(7)]
-            network_ids = [3*i for i in range(3)]
+            network_ids = [i for i in range(4)]
         elif type(network_ids) is int:
             network_ids = [network_ids]
         elif type(network_ids) is np.ndarray:
@@ -1533,7 +1664,7 @@ class LeafNetwork(object):
         else:
             # should raise an error if network_ids is not iterable, which is the necessary functionality
             iter(network_ids)
-        networks = [self._nets[id].name for id in network_ids]
+        networks = [self.nets[id].name for id in network_ids]
         for i in range(len(network_ids)):
             if i not in range(7):
                 raise ValueError("Invalid network ID supplied. Must be an integer between 0 and 6. The invalid ID is %r" %(i))
@@ -1568,11 +1699,11 @@ class LeafNetwork(object):
                 times = [start]
         if batch_process:
             for id in range(len(network_ids)):
-                if network_ids[id] in [0, 6]:
-                    batch_prediction = self._nets[network_ids[id]](input1D)
+                if network_ids[id] in [0, 1, 2]:
+                    batch_prediction = self.nets[network_ids[id]](input1D)
                     predictions[:, id, :] = [self.to_output(sample) for sample in batch_prediction]
                 elif network_ids[id] in [3]:
-                    batch_prediction = self._nets[network_ids[id]](input2D)
+                    batch_prediction = self.nets[network_ids[id]](input2D)
                     predictions[:, id, :] = [self.to_output(sample) for sample in batch_prediction]
             if targets is not None:
                 for batch in range(batch_size):
@@ -1580,11 +1711,11 @@ class LeafNetwork(object):
         else:
             for batch in range(batch_size):
                 for id in range(len(network_ids)):
-                    if network_ids[id] in [0, 6]:
-                        prediction = self.to_output(self._nets[network_ids[id]](input1D)[0])
+                    if network_ids[id] in [0, 1, 2]:
+                        prediction = self.to_output(self.nets[network_ids[id]](input1D)[0])
                         predictions[batch, id, :] = prediction
                     elif network_ids[id] in [3]:
-                        prediction = self.to_output(self._nets[network_ids[id]](input2D)[0])
+                        prediction = self.to_output(self.nets[network_ids[id]](input2D)[0])
                         predictions[batch, id, :] = prediction
                     if timing:
                         if verbose and verbosity >= 2:
@@ -1619,37 +1750,6 @@ class LeafNetwork(object):
             return predictions, networks
         else:
             return predictions, networks, errors
-
-        # print "Predictions"
-        # answer = a3[0]
-        # a4 = a4[0]
-        # answer[0] = 2.**answer[0]
-        # a4[0] = 2.**a4[0]
-        # aS1D[0] = 2.**aS1D[0]
-        # aS2D[0] = 2.**aS2D[0]
-        # # answer[1], answer[3] = (answer[1]+.5)*(2.*np.pi), (answer[3]+.5)*(2.*np.pi)
-        # answer[1] = (answer[1]+.5)*(2.*np.pi)
-        # a4[1] = (a4[1]+.5)*(2.*np.pi)
-        # aA1D[0] = (aA1D[0]+.5)*(2.*np.pi)
-        # aA2D[0] = (aA2D[0]+.5)*(2.*np.pi)
-        #
-        # a5 = a5[0]
-        # print "1D Scale Isolated: ", aS1D[0]
-        # print "Error: ", (aS1D[0]-expected[0])/expected[0]
-        # print "2D Scale Isolated: ", aS2D[0]
-        # print "Error: ", (aS2D[0]-expected[0])/expected[0]
-        # print "1D Angle Isolated: ", aA1D[0]
-        # print "Error: ", (aA1D[0]-expected[1])/expected[1]
-        # print "2D Angle Isolated: ", aA2D[0]
-        # print "Error: ", (aA2D[0]-expected[1])/expected[1]
-        # print "Pretrained: ", answer
-        # print "Error: ", [(answer[i]-expected[i])/expected[i] for i in range(len(expected))]
-        # print "Pretrained 2D: ", a5
-        # print "Error: ", [(a5[i]-expected[i])/expected[i] for i in range(len(expected))]
-        # print "Dumb: ", a4
-        # print "Error: ", [(a4[i]-expected[i])/expected[i] for i in range(len(expected))]
-        # print
-        # return answer, a4
     def iterate_minibatches(self, inputs, targets, batchsize, shuffle=False):
         assert len(inputs) == len(targets)
         if shuffle:
