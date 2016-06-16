@@ -16,6 +16,7 @@ from scipy.misc import imresize
 from scipy.ndimage import imread as sp_imread
 from scipy.ndimage.interpolation import shift, zoom, rotate
 from skimage import transform as tf
+from leafhough import *
 
 # Neural Network Imports
 import theano
@@ -31,210 +32,7 @@ import warnings
 from progressbar import ProgressBar, Bar, Percentage
 from collections import defaultdict
 from leafarea import *
-
-def get_scale(leafimage, minticks, scaleunits):
-    """
-
-    :param leafimage:
-    :param minticks:
-    :param scaleunits:
-    :return:
-    """
-    print "get_scale"
-    n, m = leafimage.shape
-
-    scale, found, edge = metricscale(leafimage, minticks, scaleunits)
-#        print "width,height (cm) = ", n * scale, m * scale, "scale = ", scale
-    if not found:   # try to find a scale after histogram equalization
-        scale, found, edge = metricscale(leafimage, minticks, scaleunits, True, False)
-#            print "width,height with histogram equalization (cm) = ", n * scale, m * scale, "scale = ", scale
-
-    if not found:   # try to find a scale after Gaussian blur
-        scale, found, edge = metricscale(leafimage, minticks, scaleunits, False, True)
-#                print "width,height with histogram equalization (cm) = ", n * scale, m * scale, "scale = ", scale
-    return scale
-
-def iso_leaf(segmented_image, leaf_num, square_length=64, ref_image=None, rescale=True):
-    """
-    Takes a segmented image containing a leaf and returns a cropped (and maybe scaled) image containing just leaf
-    specified by leaf_num by isolating the pixels with value leaf_num.
-    :param segmented_image: ndarray
-                        The segmented image containing the leaf to be isolated.
-    :param leaf_num: int
-                        The number specifying which leaf to isolate.
-    :param square_length: int, optional
-                        The dimension which the final output image should be. Default is 64.
-    :param ref_image:   ndarray, optional
-                        If specified, isolates the leaf in this image as well. Useful if color information must be
-                        preserved.
-    :param rescale:     Bool, optional
-                        Whether to allow rescaling of the isolated leaf images.
-    :return: petiole, scale, contour
-            petiole: ndarray, the image of the isolated leaf
-            scale: float, the scale used to make the image fit into the dimension specified by square_length
-            contour: contour, a contour instance of the leaf
-    """
-    scale = 1.
-    rows, cols = np.where(segmented_image == leaf_num)
-    left = np.min(cols)
-    top = np.min(rows)
-    dimspan = max(np.ptp(zip(rows, cols), 0))
-
-    if ref_image is not None:
-        ref_image = ref_image.astype(float)
-        petiole = np.zeros(ref_image.shape, float)
-        for p in zip(rows, cols):
-            petiole[p] = ref_image[p]
-        petiole = petiole[top:(top+dimspan+1), left:(left+dimspan+1)]
-    else:
-        petiole = np.zeros(segmented_image.shape[:2], bool)
-        i = 0
-        for pixel in zip(rows, cols):
-            petiole[pixel] = True
-            i+=1
-        petiole = petiole[top:(top + dimspan + 1), left:(left + dimspan + 1)]
-
-    contour = np.zeros(segmented_image.shape[:2], bool)
-    for c in zip(rows, cols):
-        contour[c] = True
-    contour = contour[top:(top + dimspan + 1), left:(left + dimspan + 1)]
-    if rescale:
-        scale = float(square_length-2)/float(max(petiole.shape[:2]))
-        petiole = imresize(petiole, scale, interp='bicubic')
-        contour = imresize(contour, scale, interp='bicubic').astype(bool)
-        contour = np.pad(contour, 1, mode='constant', constant_values=False)
-    try:
-        contour = parametrize(contour)
-    except TypeError:
-        print "No leaf found in image"
-        raise
-
-    if ref_image is not None:
-        padded = np.zeros((square_length, square_length, 3), float)
-        shape = [s+1 for s in petiole.shape[:2]]
-        if shape[0] < square_length+1 and shape[1] < square_length+1:
-            padded[1:shape[0], 1:shape[1]] = petiole[:, :]
-        elif shape[1] < square_length+1:
-            padded[1:, 1:shape[1]] = petiole[:63, :]
-        else:
-            padded[1:, 1:] = petiole[:square_length-1, :square_length-1]
-        petiole = padded
-    else:
-        padded = np.zeros((square_length, square_length), bool)
-        shape = [s+1 for s in petiole.shape[:2]]
-        try:
-            if shape[0] < square_length+1 and shape[1] < square_length+1:
-                padded[1:shape[0], 1:shape[1]] = petiole[:, :]
-            elif shape[1] < square_length+1:
-                padded[1:, 1:shape[1]] = petiole[:square_length-1, :]
-            elif shape[0] < square_length+1:
-                padded[1:shape[0], 1:] = petiole[:, :square_length-1]
-            else:
-                padded[1:, 1:] = petiole[:square_length-1, :square_length-1]
-        except TypeError:
-            print "Petiole shape: ", shape
-            raise
-        petiole = padded
-    return petiole, scale, contour
-
-def gradient_orientation(image):
-    """
-    Calculate the gradient orientation for edge point in the image.
-    :param image: ndarray
-                Image for which the gradient orientation should be calculated.
-    :return: gradient
-                ndarray of gradient directions at each point in the image.
-    """
-    dx = sobel(image, axis=0, mode='constant')
-    dy = sobel(image, axis=1, mode='constant')
-
-    gradient = np.arctan2(dy,dx) * 180 / np.pi
-
-    return gradient
-
-def parametrize(image):
-    """
-    This function parameterizes an object in the image using a boundary following algorithm.
-    :param image: ndarray
-                    image containing the object to be parameterized
-    :return: contour
-                    a list of tuples of the pixel locations of the object boundary
-    """
-    contour = []
-    # Find the upper-left-most edge pixel for boundary following
-    image = image.astype(bool)
-    for (j,k), value in np.ndenumerate(image):
-        if value:
-            b0 = (j, k)
-            c0 = (j, k-1)
-            contour.append(b0)
-            break
-
-    # Find the next contour point b1 to use as stop condition
-    try:
-        b1, c1 = check8(image, b0, c0)
-    except TypeError:
-        print b0, c0
-        plt.imshow(image)
-        plt.show()
-        print type(image)
-        print image.shape
-        print image[0, 0]
-        raise
-    contour.append(b1)
-    b, c = b1, c1
-    stop = image.shape[0]*image.shape[1]
-    # Follow the boundary until we return to b0 -> b1
-    s = 0
-    while True:
-        bit, cit = check8(image, b, c)
-        if b == b0 and bit == b1 or s == stop:
-            break
-        b, c = bit, cit
-        s+=1
-        contour.append(b)
-    return contour
-
-def check8(image, fgpixel, bgpixel):
-    """
-     Checks the 8 neighbors of fgpixel for the first true value in a clockwise orientation starting from bgpixel
-    :param image: ndarray
-                image in which to search
-    :param fgpixel: tuple
-                foreground pixel location
-    :param bgpixel:
-                background pixel location
-    :return: tuple, tuple
-                tuples denoting the first true pixel location found, and the last false pixel before the true pixel was
-                found.
-    """
-
-    orientation = convert((bgpixel[0]-fgpixel[0], bgpixel[1]-fgpixel[1]))
-    movements = [int(orientation + i + 1)%8 for i in range(8)]
-    for m in movements:
-        try:
-            if image[fgpixel[0] + convert(m)[0], fgpixel[1] + convert(m)[1]]:
-                return (fgpixel[0] + convert(m)[0], fgpixel[1] + convert(m)[1]), (fgpixel[0] + convert(m-1)[0], fgpixel[1] + convert(m-1)[1])
-        except IndexError:
-            pass
-
-def convert(Input):
-    """
-    Helper function to convert between chain-code and relative position representations.
-    :param Input: int or tuple
-                int: convert Input from chain-code to relative position
-                tuple: covert Input from relative position to chain-code
-
-    :return: tuple or int
-                tuple: the relative position representation of Input
-                int: the chain-code representation of Input
-    """
-    PositionToCode = {(0, -1):0, (-1, -1):1, (-1, 0):2, (-1, 1):3, (0, 1):4, (1, 1):5, (1, 0):6, (1, -1):7}
-    CodeToPosition = {0:(0, -1), 1:(-1, -1), 2:(-1, 0), 3:(-1, 1), 4:(0, 1), 5:(1, 1), 6:(1, 0), 7:(1, -1)}
-    if type(Input) is tuple:
-        return PositionToCode[Input]
-    if type(Input) is int or float:
-        return CodeToPosition[int(Input)%8]
+from image_processing import *
 
 class TrainingData:
     def __init__(self, leaves, contours, scales, sigma=1., img_from_contour=False, names=None):
@@ -529,10 +327,11 @@ class LeafNetwork(object):
         if verbose:
             print "Done"
             print
-    def __init__(self, data1D, data2D, targets, train_prop=0.75, num_epochs=1000, stop_err=0.01,
+    def __init__(self, data1D, data2D, targets, ref_image, train_prop=0.75, num_epochs=1000, stop_err=0.01,
                  d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9, beta_2=0.999,
                  epsilon=1e-8, nonlinearity='tanh', n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3,
-                 freeze_autoencoder=False, verbose=True, plotting=True, verbosity=3, shuffle=True, pretrain=True, nets=None, name=None, save_plots=True, **kwargs):
+                 freeze_autoencoder=False, verbose=True, plotting=True, verbosity=3, shuffle=True, pretrain=True,
+                 nets=None, name=None, save_plots=True, **kwargs):
         """
         Initializes and trains the networks with the given parameters
             :param data1D:     array-like
@@ -627,6 +426,10 @@ class LeafNetwork(object):
         assert len(data1D.shape) == 2, "1D data shape error: training data has wrong number of dimensions.\nExpected 2 with format (# samples, points/sample) and instead got %r" % (data1D.shape)
         assert len(data2D.shape) == 4, "2D data shape error: training data has wrong number of dimensions.\nExpected 4 with format (# samples, channels/sample, height, width) and instead got %r" % (data2D.shape)
 
+        print "Ref Image Shape"
+        print ref_image.shape
+        self.ref_image = rgb_to_grey(ref_image)
+        print self.ref_image.shape
         self._input1D_size = data1D.shape[-1]
         self._input2D_shape = data2D.shape[1:]
 
@@ -648,11 +451,11 @@ class LeafNetwork(object):
         self._n_2Dfilters = n_2Dfilters
 
         if name is None:
-            self.__name__ = str(self._n_conv) + "CF" + str(self._n_1Dfilters) + "." + str(self._n_2Dfilters) + "_" + str(self._n_dense) + "D"
+            self.__name__ = str(self._n_conv) + "CLayers_" + str(self._n_1Dfilters) + "_1Dfilt_" + str(self._n_2Dfilters) + "_2Dfilt_" + str(self._n_dense) + "DLayers"
         else:
             self.__name__ = name
         # self.create_layers(n_1Dfilters, n_2Dfilters, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, **kwargs)
-        self.create_layers(1, 1, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, nets=nets, pretrain=pretrain, **kwargs)
+        self.create_layers(1, 1, 2, 2, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, nets=nets, pretrain=pretrain, **kwargs)
         self.train_network(num_epochs, stop_err, d_stable, n_stable, learning_rate, beta_1, beta_2, epsilon, verbose=verbose, plotting=plotting, verbosity=verbosity, save_plots=save_plots, pretrain=pretrain, **kwargs)
 
     def create_layers(self, n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3, nonlinearity='tanh', freeze_autoencoder=False, nets=None, pretrain=True, **kwargs):
@@ -748,7 +551,7 @@ class LeafNetwork(object):
                 else:
                     self.ConvLayers.append(layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity))
                 if 2 in self.__nets__:
-                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
+                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1]*self._n_1Dfilters, nonlinearity=self._nonlinearity)
             if c is not 0 and 1 in self.__nets__:
                 # DConvLayers already has a convolutional layer from the batch normalization step, so skip on the first iteration.
                 self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=n_1Dfilters, filter_size=filter_size, nonlinearity=self._nonlinearity)
@@ -844,7 +647,7 @@ class LeafNetwork(object):
             if 0 in self.__nets__:
                 self.ConvLayers.append(layers.MaxPool1DLayer(self.ConvLayers[-1], pool_size=pool_size))
                 if 2 in self.__nets__:
-                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
+                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.ConvLayers[-1])[-1]*self._n_1Dfilters, nonlinearity=self._nonlinearity)
             if 1 in self.__nets__:
                 self.DConvLayers = layers.MaxPool1DLayer(self.DConvLayers, pool_size=pool_size)
             if 3 in self.__nets__:
@@ -881,7 +684,7 @@ class LeafNetwork(object):
                 self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.ConvLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
                 self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.ConvLayers[-1], p=dropout), num_units=2*layers.get_output_shape(self.ConvLayers[-1])[-1], nonlinearity=self._nonlinearity)
                 if 2 in self.__nets__:
-                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
+                    self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DenseLayers)[-1], nonlinearity=self._nonlinearity)
             if 1 in self.__nets__:
                 self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=2*layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
             if 3 in self.__nets__:
@@ -903,7 +706,7 @@ class LeafNetwork(object):
                     self.Conv1DScaleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DScaleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv1DScaleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
                     self.Conv1DAngleNetLayers = layers.DenseLayer(layers.dropout(self.Conv1DAngleNetLayers, p=dropout), num_units=layers.get_output_shape(self.Conv1DAngleNetLayers)[-1]/2, nonlinearity=self._nonlinearity)
                     if 2 in self.__nets__:
-                        self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1], nonlinearity=self._nonlinearity)
+                        self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=layers.get_output_shape(self.DenseLayers)[-1]/2, nonlinearity=self._nonlinearity)
                 if 1 in self.__nets__:
                     self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=layers.get_output_shape(self.DConvLayers)[-1]/2, nonlinearity=self._nonlinearity)
                 if 3 in self.__nets__:
@@ -983,7 +786,6 @@ class LeafNetwork(object):
         """
         verbose = kwargs.get('verbose', False)
         verbosity = kwargs.get('verbosity', 3)
-        format = kwargs.get('format', 'png')
 
         num_epochs = int(num_epochs)
         self.d_stable = d_stable
@@ -1386,13 +1188,13 @@ class LeafNetwork(object):
                 plt.xlabel("Epoch")
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
-                if plotting:
-                    plt.show()
                 if save_plots:
                     dir = os.path.dirname(__file__)
-                    name = self.netname+str(time.time())
-                    figfile = os.path.join(dir, "../plots/"+name+"MLPconvcompare")
-                    plt.savefig(figfile, format=format)
+                    name = self.__name__+"__"+str(time.time())
+                    figfile = os.path.join(dir, "../plots/"+name+"_MLPconvcompare.png")
+                    plt.savefig(figfile)
+                if plotting:
+                    plt.show()
             if 0 in self.__nets__:
                 plt.title(fill("1-D Convolutional Network Training and Validation Error: %r filters" %(self._n_1Dfilters), 60))
                 plt.plot(Conv1DErr, 'g', label='Training')
@@ -1400,11 +1202,11 @@ class LeafNetwork(object):
                 plt.xlabel("Epoch")
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
+                if save_plots:
+                    figfile = os.path.join(dir, "../plots/"+name+"1Dconv.png")
+                    plt.savefig(figfile)
                 if plotting:
                     plt.show()
-                if save_plots:
-                    figfile = os.path.join(dir, "../plots/"+name+"1Dconv")
-                    plt.savefig(figfile, format=format)
 
             if 3 in self.__nets__:
                 plt.title(fill("2-D Convolutional Network\nTraining and Validation Error: %r filters" %(self._n_2Dfilters), 60))
@@ -1413,11 +1215,12 @@ class LeafNetwork(object):
                 plt.xlabel("Epoch")
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
+                if save_plots:
+                    figfile = os.path.join(dir, "../plots/"+name+"2Dconv.png")
+                    plt.savefig(figfile)
                 if plotting:
                     plt.show()
-                if save_plots:
-                    figfile = os.path.join(dir, "../plots/"+name+"2Dconv")
-                    plt.savefig(figfile, format=format)
+
         # Add the trained networks to self.
         self.nets = dict()
 
@@ -1433,10 +1236,20 @@ class LeafNetwork(object):
         data2, target = self._data2D[:2], self._targets[:2]
         print "Test"
         print "Expected: ", target
-        predictions, networks, errors = self.solve(input2D=self.shape_data2D(data2, channel_axis=1, batch_axis=0, batched=True), targets=target, network_ids=3)
+        predictions, networks, errors, coordinates = self.solve(input2D=self.shape_data2D(data2, channel_axis=1, batch_axis=0, batched=True), targets=target, network_ids=3)
         print "Predictions: ", predictions
         print "Networks: ", networks
         print "Errors: ", errors
+        example = rgb_to_grey(data2[0])
+        plt.imshow(example, alpha=0.5)
+        overlay = rotate(example, 180.*coordinates[0][2]/np.pi, reshape=False)
+        overlay = zoom(overlay, coordinates[0][3])
+        overlay = shift(overlay, coordinates[0][:2])
+        example = np.zeros((64, 64, 3), dtype=float)
+        example[:, :, 1] = overlay
+        plt.imshow(example, alpha=0.5)
+        plt.show()
+
 
     def stablecheck(self, error_list):
         """
@@ -1580,7 +1393,7 @@ class LeafNetwork(object):
         else:
             error = (np.abs(x[0]-y[0]-epsilon)/np.abs(y[0]+epsilon), np.abs(x[1]-y[1]-epsilon)/np.abs(y[1])+epsilon)
         return error
-    def solve(self, input1D=None, input2D=None, targets=None, network_ids=None, timing=False, batch_process=False, **kwargs):
+    def solve(self, input1D=None, input2D=None, targets=None, network_ids=None, timing=False, batch_process=False, feedback=True, **kwargs):
         """
         :param input1D: ndarray, optional
                             An array containing the curvature data to be solved. The dimensions must be
@@ -1677,7 +1490,7 @@ class LeafNetwork(object):
                     network_ids.remove(6)
                 except ValueError:
                     pass
-        elif input2D is None and 3 in network_ids:
+        if input2D is None and 3 in network_ids:
             warnings.warn("Asked to return data from 2-D convolutional networks but no image data was given. Ignoring invalid requests.", Warning)
             while 3 in network_ids:
                 try:
@@ -1688,6 +1501,7 @@ class LeafNetwork(object):
 
 
         predictions = np.empty((batch_size, len(network_ids), 2))
+        coordinates = []
         if targets is not None:
             errors  = np.empty((batch_size, len(network_ids), 2))
 
@@ -1723,6 +1537,39 @@ class LeafNetwork(object):
                             print "Sample {} solution time: {:.3f}s".format(batch, times[-1] - times[-2])
                     if targets is not None:
                         errors[batch, id, :] = self.get_error(prediction, targets[batch], relative, epsilon)
+        if feedback:
+            dir = os.path.dirname(__file__)
+            try:
+                os.stat(os.path.join(dir, "../feedback/"))
+            except:
+                os.mkdir(os.path.join(dir, "../feedback/"))
+                feedbackdir = os.path.join(dir, "../feedback/"+self.__name__+"_"+str(time.time()))
+                os.mkdir(feedbackdir)
+
+            for i in range(batch_size):
+                original = np.zeros((self._input2D_shape[1], self._input2D_shape[2], self._input2D_shape[0]), dtype=float)
+                for j in range(3):
+                    original[:, :, j] = input2D[i, j, :, :]
+                overlay = np.empty_like(self.ref_image)
+                # candidates = predictions[i]
+                scale = np.mean(predictions[i, :, 0])
+                scales = np.linspace(scale-.2, scale+.2, 10)
+                angle = np.mean(predictions[i, :, 1])
+                angles = np.linspace(angle-0.2*np.pi, angle+0.2*np.pi, 10)
+                accumulator = general_hough_closure(self.ref_image, angles=angles, scales=scales)
+                acc_array, angles, scales = accumulator(input2D[i])
+                y, x, a, s = np.unravel_index(accumulator.argmax(), accumulator.shape)
+                dy, dx = y - self.ref_image.shape[0], x - self.ref_image.shape[1]
+                acoordinates.append((dy, dx, scales[s], angles[a]))
+
+                filename = "feedback_"+str(i)+"_"+str(dy)+"_"+str(dx)+"_"+str(angles[a]*180./np.pi)+"_"+str(scales[s])+".png"
+                zoom(self.ref_image, scales[s], overlay)
+                rotate(overlay, angles[a], overlay, resize=False)
+                shift(overlay, (dy, dx), overlay)
+                plt.imshow(original, alpha=0.5)
+                plt.imshow(overlay, alpha=0.5)
+                plt.savefig(os.path.join(feedbackdir, filename))
+
         if verbose:
             print "Done"
 
@@ -2226,7 +2073,7 @@ class Leaf(Contour):
             break
         weight = float(len(new))/float(length)
         return Leaf(img, contour=new, scale=self.scale, img_from_contour=True, sigma=self.sigma, orient=False, name=self.__name__, rescale=False), weight
-    def randomdata(self, base_size=20, data_size=100, **kwargs):
+    def randomdata(self, base_size=20, data_size=100,**kwargs):
         """Creates a list of randomly scaled and rotated partially eaten leaves.
                 base_size: number of unique random walks to perform
                 data_size: number of inputs to the network"""
@@ -2350,7 +2197,7 @@ def test(pickled):
         LeafNet =cPickle.load(open("netdump.p", "rb"))
     else:
         print 'Building Network'
-        LeafNet = LeafNetwork(inputs, inputs2D, targets)
+        LeafNet = LeafNetwork(inputs, inputs2D, targets, data.leaves[0].color_image)
         cPickle.dump(LeafNet, open("netdump.p", "wb"))
         print 'Network Constructed'
         pickled = True
