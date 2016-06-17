@@ -305,8 +305,15 @@ class TrainingData:
 
 class LeafNetwork(object):
     def split_data(self, train_prop=0.75, shuffle=True, verbose=False, **kwargs):
-        """Splits the data into train_prop% training and 1-train_prop% validation data"""
-
+        """
+        Splits the data into train_prop% training and 1-train_prop% validation data
+        :param train_prop:  float, optional,
+                        Proportion of data to be used for training. The remaining is used as validation data
+        :param shuffle:     Bool, optional,
+                        Whether or not to shuffle the data before splitting it. This is recommended
+        :param verbose:     Bool, optional,
+                        Whether to print output to the screen
+        """
         if verbose:
             print "Splitting Data..."
 
@@ -415,6 +422,9 @@ class LeafNetwork(object):
                             Set the verbosity level.
                             0: low verbosity
                             3: maximum verbosity
+            :return:        LeafNetwork,
+                            A LeafNetwork object containing all data and methods needed to reconstruct and retrain a
+                            network
         """
         self._nonlindict    = {'tanh': nonlinearities.tanh, 'sigmoid': nonlinearities.sigmoid,
                                'softmax': nonlinearities.softmax, 'ReLU': nonlinearities.rectify,
@@ -445,7 +455,7 @@ class LeafNetwork(object):
         # self._n_conv = n_conv
         self._n_conv = 2
         # self._n_dense = n_dense
-        self._n_dense = 2
+        self._n_dense = 3
         # self._n_1Dfilters = n_1Dfilters
         self._n_1Dfilters = 1
         # self._n_2Dfilters = n_2Dfilters
@@ -458,6 +468,7 @@ class LeafNetwork(object):
         self.create_layers(n_1Dfilters, n_2Dfilters, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, **kwargs)
         # self.create_layers(1, 1, 2, 4, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, nets=nets, pretrain=pretrain, **kwargs)
         self.train_network(num_epochs, stop_err, d_stable, n_stable, learning_rate, beta_1, beta_2, epsilon, verbose=verbose, plotting=plotting, verbosity=verbosity, save_plots=save_plots, pretrain=pretrain, **kwargs)
+        return self
 
     def create_layers(self, n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3, nonlinearity='tanh', freeze_autoencoder=False, nets=None, pretrain=True, **kwargs):
         """
@@ -783,7 +794,8 @@ class LeafNetwork(object):
                                         Whether to print information to the screen.
                                     verbosity: int
                                         Verbosity level of the printed information. Useless unless 'verbose' is True.
-        :return:
+        :return: nets:      dict,
+                            A dictionary containing the various networks which were constructed.
         """
         verbose = kwargs.get('verbose', False)
         verbosity = kwargs.get('verbosity', 3)
@@ -1181,7 +1193,7 @@ class LeafNetwork(object):
 
         if plotting or save_plots:
             if 0 in self.__nets__ and 2 in self.__nets__:
-                plt.title(fill("MLP and 1-D Unpretrained Convolutional Network Training and Validation Error", 60))
+                plt.title(fill("MLP and 1-D Unpretrained Convolutional Network Training and Validation Error", 45))
                 plt.plot(DConvErr, 'g', label='Convolutional, Training')
                 plt.plot(DConvValErr, 'b', label='Convolutional, Validation')
                 plt.plot(DenseErr, 'k', label='MLP, Training')
@@ -1197,7 +1209,7 @@ class LeafNetwork(object):
                 if plotting:
                     plt.show()
             if 0 in self.__nets__:
-                plt.title(fill("1-D Convolutional Network Training and Validation Error: %r filters" %(self._n_1Dfilters), 60))
+                plt.title(fill("1-D Convolutional Network Training and Validation Error: %r filters" %(self._n_1Dfilters), 45))
                 plt.plot(Conv1DErr, 'g', label='Training')
                 plt.plot(Conv1DValErr, 'b', label='Validation')
                 plt.xlabel("Epoch")
@@ -1210,7 +1222,7 @@ class LeafNetwork(object):
                     plt.show()
 
             if 3 in self.__nets__:
-                plt.title(fill("2-D Convolutional Network\nTraining and Validation Error: %r filters" %(self._n_2Dfilters), 60))
+                plt.title(fill("2-D Convolutional Network Training and Validation Error: %r filters" %(self._n_2Dfilters), 45))
                 plt.plot(Conv2DErr, 'g', label='Training')
                 plt.plot(Conv2DValErr, 'b', label='Validation')
                 plt.xlabel("Epoch")
@@ -1251,6 +1263,7 @@ class LeafNetwork(object):
         plt.imshow(example, alpha=0.5)
         plt.show()
 
+        return self.nets
 
     def stablecheck(self, error_list):
         """
@@ -1552,7 +1565,6 @@ class LeafNetwork(object):
                 for j in range(3):
                     original[:, :, j] = input2D[i, j, :, :]
                 overlay = np.empty_like(self.ref_image)
-                # candidates = predictions[i]
                 scale = np.mean(predictions[i, :, 0])
                 scales = np.linspace(scale-.2, scale+.2, 10)
                 angle = np.mean(predictions[i, :, 1])
@@ -1598,17 +1610,6 @@ class LeafNetwork(object):
             return predictions, networks
         else:
             return predictions, networks, errors
-    def iterate_minibatches(self, inputs, targets, batchsize, shuffle=False):
-        assert len(inputs) == len(targets)
-        if shuffle:
-            indices = np.arange(len(inputs))
-            np.random.shuffle(indices)
-        for start_idx in range(0, len(inputs) - batchsize + 1, batchsize):
-            if shuffle:
-                excerpt = indices[start_idx:start_idx + batchsize]
-            else:
-                excerpt = slice(start_idx, start_idx + batchsize)
-        yield inputs[excerpt], targets[excerpt]
 
 class Contour(object):
     def __init__(self, contour, sigma=1., scale=1., rescale=False, **kwargs):
@@ -2202,114 +2203,6 @@ def test(pickled):
         cPickle.dump(LeafNet, open("netdump.p", "wb"))
         print 'Network Constructed'
         pickled = True
-
-
-    angles          = np.linspace(0, 2.*np.pi*(1.-1./float(ninputs)), ninputs)
-    test_leaf, _    = data.leaves[0].randomwalk()
-    # contour = parametrize(test_leaf.image)
-    # shape = np.amax(contour)
-    # shape = (shape+1, shape+1)
-    # img = np.zeros(shape, bool)
-    # for c in contour:
-    #     img[c] = True
-    img = imresize(test_leaf.image, 1.3, interp='bicubic')
-    print "Before"
-    plt.imshow(img)
-    plt.show()
-    img = img[:64, :64]
-    print img.shape
-    img = np.array(img)
-    # im = np.zeros((64, 64), img.dtype)
-    # for i in range(64):
-    #     for j in range(64):
-    #         im[i, j] = np.sum(img[i, j, :]/3.)
-    #         for c in range(3):
-    #             im[c, i, j] = img[i, j, c]
-    test_leaf = Leaf(img, orient=False, sigma=0.1*256, name="test")
-    im = list()
-    for a in angles:
-        c = test_leaf.curvatures[test_leaf.extractpoint(a)]
-        if np.isnan(c):
-            print "c is a nan"
-            c = 1e8
-        im.append(c)
-    print len(im)
-    print np.array(im, ndmin=1).shape
-    # test_points = np.array([test_leaf.curvatures[test_leaf.extractpoint(a)] for a in angles], ndmin=2)
-    #
-    print test_leaf.image.shape
-    result = LeafNet.solve(np.asarray(im))
-    # result = LeafNet.network.activate(im)
-    print result
-    print "Solution to s=1.3, a=0"
-    scale, angle = result[0][:]
-    scale = 2.**scale
-    angle = 2.*np.pi*(angle+0.5)
-    print scale, angle
-    c = parametrize(img)
-    print "Scale error: ", (1.3-2.**result[0][0])/1.3
-    print "Angle error: ", 1.-(2.*np.pi+result[0][1])/(2.*np.pi)
-    img = tf.rotate(img, -angle*180./np.pi, resize=True)
-    if scale != 0: img = imresize(img, 1./scale, interp='bicubic')
-    # print np.ptp(contour, 0)
-    # print np.ptp(c, 0)
-    print "After"
-    plt.imshow(img)
-    plt.show()
-
-    test_leaf, _ = data.leaves[3].randomwalk()
-    # contour = parametrize(test_leaf.image)
-    # shape = np.amax(contour)
-    # shape = (shape+1, shape+1)
-    # img = np.zeros(shape, bool)
-    # for c in contour:
-    #     img[c] = True
-
-    img = imresize(test_leaf.image, 0.7, interp='bicubic')
-    img = tf.rotate(img, 45, resize=True)
-    print "Before"
-    plt.imshow(img)
-    plt.show()
-    img = img[:64, :64]
-    print img.shape
-    img = np.array(img)
-    # im = np.zeros((64, 64), img.dtype)
-    # for i in range(64):
-    #     for j in range(64):
-    #         im[i, j] = np.sum(img[i, j, :]/3.)
-    #         for c in range(3):
-    #             im[c, i, j] = img[i, j, c]
-    test_leaf = Leaf(img, orient=False, sigma=0.1*256, name="test")
-    im = list()
-    for a in angles:
-        c = test_leaf.curvatures[test_leaf.extractpoint(a)]
-        if np.isnan(c):
-            print "c is a nan"
-            c = 1e8
-        im.append(c)
-    print len(im)
-    print np.array(im, ndmin=2).shape
-    # test_points = np.array([test_leaf.curvatures[test_leaf.extractpoint(a)] for a in angles], ndmin=2)
-    #
-    print test_leaf.image.shape
-    result = LeafNet.solve(np.array(im, ndmin=2))
-    # result = LeafNet.network.activate(im)
-    print result
-    print "Solution to s=0.7, a=45"
-    scale, angle = result[0][:]
-    scale = 2.**scale
-    angle = 2.*np.pi*(angle+0.5)
-    print scale, angle
-    c = parametrize(img)
-    print "Scale error: ", (.7-2.**result[0][0])/.7
-    print "Angle error: ", (np.pi/4.-2.*np.pi*(result[0][1]-0.5))/(np.pi/4.)
-    img = tf.rotate(img, -angle*180./np.pi, resize=True)
-    if scale != 0: img = imresize(img, 1./scale, interp='bicubic')
-    # print np.ptp(contour, 0)
-    # print np.ptp(c, 0)
-    print "After"
-    plt.imshow(img)
-    plt.show()
 
 if __name__=='__main__':
     # pickled = False
