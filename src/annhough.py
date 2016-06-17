@@ -426,10 +426,7 @@ class LeafNetwork(object):
         assert len(data1D.shape) == 2, "1D data shape error: training data has wrong number of dimensions.\nExpected 2 with format (# samples, points/sample) and instead got %r" % (data1D.shape)
         assert len(data2D.shape) == 4, "2D data shape error: training data has wrong number of dimensions.\nExpected 4 with format (# samples, channels/sample, height, width) and instead got %r" % (data2D.shape)
 
-        print "Ref Image Shape"
-        print ref_image.shape
         self.ref_image = rgb_to_grey(ref_image)
-        print self.ref_image.shape
         self._input1D_size = data1D.shape[-1]
         self._input2D_shape = data2D.shape[1:]
 
@@ -445,17 +442,21 @@ class LeafNetwork(object):
         self._targets   = targets
         self.split_data(train_prop, shuffle=shuffle)
 
-        self._n_conv = n_conv
-        self._n_dense = n_dense
-        self._n_1Dfilters = n_1Dfilters
-        self._n_2Dfilters = n_2Dfilters
+        # self._n_conv = n_conv
+        self._n_conv = 2
+        # self._n_dense = n_dense
+        self._n_dense = 2
+        # self._n_1Dfilters = n_1Dfilters
+        self._n_1Dfilters = 1
+        # self._n_2Dfilters = n_2Dfilters
+        self._n_2Dfilters = 1
 
         if name is None:
             self.__name__ = str(self._n_conv) + "CLayers_" + str(self._n_1Dfilters) + "_1Dfilt_" + str(self._n_2Dfilters) + "_2Dfilt_" + str(self._n_dense) + "DLayers"
         else:
             self.__name__ = name
-        # self.create_layers(n_1Dfilters, n_2Dfilters, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, **kwargs)
-        self.create_layers(1, 1, 2, 2, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, nets=nets, pretrain=pretrain, **kwargs)
+        self.create_layers(n_1Dfilters, n_2Dfilters, n_conv, n_dense, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, **kwargs)
+        # self.create_layers(1, 1, 2, 4, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, nets=nets, pretrain=pretrain, **kwargs)
         self.train_network(num_epochs, stop_err, d_stable, n_stable, learning_rate, beta_1, beta_2, epsilon, verbose=verbose, plotting=plotting, verbosity=verbosity, save_plots=save_plots, pretrain=pretrain, **kwargs)
 
     def create_layers(self, n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3, nonlinearity='tanh', freeze_autoencoder=False, nets=None, pretrain=True, **kwargs):
@@ -1203,7 +1204,7 @@ class LeafNetwork(object):
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
                 if save_plots:
-                    figfile = os.path.join(dir, "../plots/"+name+"1Dconv.png")
+                    figfile = os.path.join(dir, "../plots/"+name+"_1Dconvnet.png")
                     plt.savefig(figfile)
                 if plotting:
                     plt.show()
@@ -1216,7 +1217,7 @@ class LeafNetwork(object):
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
                 if save_plots:
-                    figfile = os.path.join(dir, "../plots/"+name+"2Dconv.png")
+                    figfile = os.path.join(dir, "../plots/"+name+"_2Dconvnet.png")
                     plt.savefig(figfile)
                 if plotting:
                     plt.show()
@@ -1558,7 +1559,7 @@ class LeafNetwork(object):
                 angles = np.linspace(angle-0.2*np.pi, angle+0.2*np.pi, 10)
                 accumulator = general_hough_closure(self.ref_image, angles=angles, scales=scales)
                 acc_array, angles, scales = accumulator(input2D[i])
-                y, x, a, s = np.unravel_index(accumulator.argmax(), accumulator.shape)
+                y, x, a, s = np.unravel_index(acc_array.argmax(), accumulator.shape)
                 dy, dx = y - self.ref_image.shape[0], x - self.ref_image.shape[1]
                 acoordinates.append((dy, dx, scales[s], angles[a]))
 

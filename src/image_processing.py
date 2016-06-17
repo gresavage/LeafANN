@@ -213,9 +213,93 @@ def rgb_to_grey(image):
         for i in range(shape[0]):
             for j in range(shape[1]):
                 grey_image[i, j] = np.mean(image[i, j, :])
-    print "RGB to Grey grey image.shape"
-    print grey_image.shape
     return grey_image
+
+
+def gradient_orientation(image):
+    """
+    Calculate the gradient orientation for edge point in the image
+    :param image:   ndimage,
+                image for which the gradient orientation is to be calculated
+    :return: gradient:  array,
+                an array holding the gradient orientation in radians for each point in the image
+    """
+    dx = sobel(image, axis=0, mode='constant')
+    dy = sobel(image, axis=1, mode='constant')
+    gradient = np.arctan2(dy, dx)
+    return gradient
+
+
+def normalize(image, weight=0.5):
+    """
+    Normalizes an image by setting pixels which fall below a certain threshhold to 0
+    :param image: ndimage,
+                Image to be normalized
+    :param weight: float, optional
+                A factor specifying the fraction of the range to use as the threshhold. A value of 0.5 denotes that any
+                pixel that is less than halfway between the max and min values will be set to 0.
+    :return: image: ndimage,
+                normalized image with integer dtype
+    """
+    minvalue = np.min(image)
+    maxvalue = np.max(image)
+    thresh = weight * (maxvalue - minvalue) + minvalue
+
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            if image[i, j] >= thresh:
+                image[i, j] = 1
+            else:
+                image[i, j] = 0
+    return image.astype(int)
+
+
+def outline(image, alignment='x', indexing='coord'):
+    """
+    Creates an outline of an image by scanning along an axis and stoping at the first pixel which is not 0
+    :param image: ndimage,
+                image to be scanned
+    :param alignment: string, optional
+                which axis to scan across. Accepts 'x' or 'y'. Specifying 'x' will scan along the first dimension (rows)
+                of the image, 'y' will scan across the second dimension (columns)
+    :param indexing: string, optional
+                Whether to index pixel locations by their (y,x) coordinates or their flattened array indeces. Specifying
+                'coord' will use (y,x) coordinates, 'ravel' will used flattened array indeces.
+    :return: pixels: list of edge pixel locations, see 'indexing' for possible output types.
+    """
+    pixels = [[], []]
+    image = normalize(image)
+    if alignment == 'x':
+        for i in range(image.shape[0]):
+            for j in range(image.shape[1]):
+                if image[i, j] != 0:
+                    pixels[1].append(i)
+                    pixels[0].append(j)
+                    break
+            for j in range(image.shape[1]):
+                if image[i, -j] != 0:
+                    pixels[1].append(i)
+                    pixels[0].append(image.shape[1] - j)
+                    break
+    if alignment == 'y':
+        for j in range(image.shape[1]):
+            for i in range(image.shape[0]):
+                if image[i, j] != 0:
+                    pixels[1].append(i)
+                    pixels[0].append(j)
+                    break
+            for i in range(image.shape[0]):
+                if image[-i, j] != 0:
+                    pixels[1].append(image.shape[0] - i)
+                    pixels[0].append(j)
+                    break
+    plt.scatter(pixels[0][:], pixels[1][:])
+    plt.show()
+    if indexing == 'coord':
+        return pixels
+    elif indexing == 'ravel':
+        pixels = np.ravel_multi_index(pixels, image.shape)
+        return pixels
 
 def convert(Input):
     """
