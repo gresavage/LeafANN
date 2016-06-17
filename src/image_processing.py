@@ -193,6 +193,7 @@ def check8(image, fgpixel, bgpixel):
             pass
 
 def rgb_to_grey(image):
+    assert len(image.shape) is 3, "Image is not RGB. Expected image with three dimensions, got %s instead" %(image.shape)
     color_channel = np.argmin(image.shape)
     shape = list()
     for i in range(len(image.shape)):

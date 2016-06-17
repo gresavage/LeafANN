@@ -154,18 +154,21 @@ class TrainingData:
         for leaf in self.leaves:
             leaf.generatewalks(20)
             data, targets, weights = self.randomdata(leaf, **kwargs)
-            print "Data length:"
-            print len(data)
+            if verbose:
+                print "Data length:"
+                print len(data)
             for d in data:
                 cdata = list()
                 d.curvature(self.sigma)
-                print "Image Shape: ", d.color_image.shape
+                if verbose:
+                    print "Image Shape: ", d.color_image.shape
                 for a in angles:
                     try:
                         c = d.curvatures[d.extractpoint(a)]
                         if np.isnan(c):
-                            print "C IS STILL A NAN"
-                            print
+                            if verbose:
+                                print "C IS STILL A NAN"
+                                print
                             c = 1E9
                         cdata.append(c)
                     except ValueError:
@@ -182,17 +185,21 @@ class TrainingData:
                 # Transpose the and reshape data to be accepted by lasagne according to (channels, height, width)
                 dimage = d.color_image.transpose(2, 0, 1)
                 dimage = dimage.reshape(1, dimage.shape[0], dimage.shape[1], dimage.shape[2])
-                print "New Shape: ", dimage.shape
-                print
+                if verbose:
+                    print "New Shape: ", dimage.shape
+                    print
                 self.trainingdata2D.append(dimage)
             self.trainingtargets.extend(targets)
             self.trainingweights.extend(weights)
         self.trainingdata2D = np.concatenate(self.trainingdata2D, axis=0)
-        print self.trainingdata2D.shape
+        if verbose:
+            print self.trainingdata2D.shape
         return self.trainingdata, self.trainingdata2D, self.trainingtargets, self.trainingweights
-    def randomdata(self, leaf, data_size=100, square_length=64, **kwargs):
+    def randomdata(self, leaf, data_size=100, square_length=64, verbose=False, **kwargs):
         """Creates a list of randomly scaled and rotated partially eaten leaves"""
-        print 'Random Data'
+
+        if verbose:
+            print 'Random Data'
         data = list()
         targets = list()
         weights = list()
@@ -211,7 +218,8 @@ class TrainingData:
             leaf = leaf_list[index]
 
             if not leaf.image.any():
-                print "None, ever"
+                if verbose:
+                    print "None, ever"
                 plt.imshow(leaf.image)
                 plt.show()
                 plt.imshow(leaf.image.astype(bool))
@@ -219,13 +227,15 @@ class TrainingData:
                 continue
             new_leaf = tf.rotate(leaf.image, angle*180./np.pi, resize=True)
             if not new_leaf.any():
-                print "None after TF"
+                if verbose:
+                    print "None after TF"
                 plt.imshow(new_leaf)
                 plt.show()
                 continue
             new_leaf = imresize(new_leaf, scale, interp='bicubic')
             if not new_leaf.any():
-                print "None after RZ"
+                if verbose:
+                    print "None after RZ"
                 plt.imshow(new_leaf)
                 plt.show()
                 continue
@@ -304,36 +314,6 @@ class TrainingData:
         return data, targets, weights
 
 class LeafNetwork(object):
-    def split_data(self, train_prop=0.75, shuffle=True, verbose=False, **kwargs):
-        """
-        Splits the data into train_prop% training and 1-train_prop% validation data
-        :param train_prop:  float, optional,
-                        Proportion of data to be used for training. The remaining is used as validation data
-        :param shuffle:     Bool, optional,
-                        Whether or not to shuffle the data before splitting it. This is recommended
-        :param verbose:     Bool, optional,
-                        Whether to print output to the screen
-        """
-        if verbose:
-            print "Splitting Data..."
-
-        indices = np.arange(len(self._data1D))
-        inx = int(train_prop*len(self._data1D))
-
-        if shuffle:
-            np.random.shuffle(indices)
-
-        train_excerpt = indices[:inx]
-        val_excerpt = indices[inx:]
-
-        self.X_train, self.y_train  = self._data1D[train_excerpt], self._targets[train_excerpt]
-        self.X_train2D = self._data2D[train_excerpt]
-        self.X_val, self.y_val      = self._data1D[val_excerpt], self._targets[val_excerpt]
-        self.X_val2D = self._data2D[val_excerpt]
-
-        if verbose:
-            print "Done"
-            print
     def __init__(self, data1D, data2D, targets, ref_image, train_prop=0.75, num_epochs=1000, stop_err=0.01,
                  d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9, beta_2=0.999,
                  epsilon=1e-8, nonlinearity='tanh', n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3,
@@ -469,7 +449,6 @@ class LeafNetwork(object):
         # self.create_layers(1, 1, 2, 4, nonlinearity, freeze_autoencoder, verbose=verbose, verbosity=verbosity, nets=nets, pretrain=pretrain, **kwargs)
         self.train_network(num_epochs, stop_err, d_stable, n_stable, learning_rate, beta_1, beta_2, epsilon, verbose=verbose, plotting=plotting, verbosity=verbosity, save_plots=save_plots, pretrain=pretrain, **kwargs)
         return self
-
     def create_layers(self, n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3, nonlinearity='tanh', freeze_autoencoder=False, nets=None, pretrain=True, **kwargs):
         """
         Builds 1- and 2-D Convolutional Networks using Theano and Lasagne
@@ -754,7 +733,6 @@ class LeafNetwork(object):
             if verbose:
                 print "Done"
             print
-
     def train_network(self, num_epochs=1000, stop_err=0.01, d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=10e-8, pretrain=True, plotting=False, save_plots=False, **kwargs):
         """
         A function to  be called when the network is ready to be trained.
@@ -1262,9 +1240,7 @@ class LeafNetwork(object):
         example[:, :, 1] = overlay
         plt.imshow(example, alpha=0.5)
         plt.show()
-
         return self.nets
-
     def stablecheck(self, error_list):
         """
         Check to see if the error has stabilized, i.e. the change in error has stayed below self.d_stable for at
@@ -1280,7 +1256,36 @@ class LeafNetwork(object):
             return False
         else:
             return diff.all()
+    def split_data(self, train_prop=0.75, shuffle=True, verbose=False, **kwargs):
+        """
+        Splits the data into train_prop% training and 1-train_prop% validation data
+        :param train_prop:  float, optional,
+                        Proportion of data to be used for training. The remaining is used as validation data
+        :param shuffle:     Bool, optional,
+                        Whether or not to shuffle the data before splitting it. This is recommended
+        :param verbose:     Bool, optional,
+                        Whether to print output to the screen
+        """
+        if verbose:
+            print "Splitting Data..."
 
+        indices = np.arange(len(self._data1D))
+        inx = int(train_prop * len(self._data1D))
+
+        if shuffle:
+            np.random.shuffle(indices)
+
+        train_excerpt = indices[:inx]
+        val_excerpt = indices[inx:]
+
+        self.X_train, self.y_train = self._data1D[train_excerpt], self._targets[train_excerpt]
+        self.X_train2D = self._data2D[train_excerpt]
+        self.X_val, self.y_val = self._data1D[val_excerpt], self._targets[val_excerpt]
+        self.X_val2D = self._data2D[val_excerpt]
+
+        if verbose:
+            print "Done"
+            print
     def shape_data2D(self, data2D, channel_axis=-1, batched=False, batch_axis=0):
         """
         :param data2D: ndarray
@@ -1337,7 +1342,6 @@ class LeafNetwork(object):
         elif n < 0.:
             raise ValueError("Image pixel values are outside accepted range. Min value %r must be nonnegative" %(n))
         return reshaped
-
     def shape_data1D(self, data1D, batched=False, batch_axis=0):
         """
         :param data1D: ndarray
@@ -1916,12 +1920,6 @@ class Contour(object):
             self.contour = cont
         return img.astype(bool)
 
-def image2gray(image):
-    img = np.zeros(image.shape[:2], np.uint8)
-    for (i, j, k), value in np.ndenumerate(image):
-        img[i, j] = int(np.mean(value))
-    return img
-
 class Leaf(Contour):
     def __init__(self, image, contour=None, img_from_contour=False, orient=True, rescale=False, sigma=1., **kwargs):
         smoothed = kwargs.get('smoothed', False)
@@ -1939,7 +1937,7 @@ class Leaf(Contour):
                         print "NumPy subdtype float"
                         print np.issubdtype(np.max(image, float))
                         self.color_image = image
-                    image = image2gray(image)
+                    image = rgb_to_grey(image)
                 else:
                     self.color_image = np.zeros((image.shape[0], image.shape[1], 3), dtype=np.float32)
                     self.color_image[:, :, 0] = image/256.
@@ -1953,7 +1951,7 @@ class Leaf(Contour):
         else:
             if len(image.shape) == 3:
                 self.color_image = image/256.
-                image = image2gray(image)
+                image = rgb_to_grey(image)
             else:
                 self.color_image = np.zeros((image.shape[0], image.shape[1], 3), dtype=np.float32)
                 self.color_image[:, :, 0] = image/256.
@@ -1984,7 +1982,6 @@ class Leaf(Contour):
     @property
     def __len__(self):
         return len(self.contour)
-
     @property
     def image(self):
         return self._image
@@ -2160,7 +2157,7 @@ def test(pickled):
             leaf, scale, contour = iso_leaf(segmented_ref[0], i+1, ref_image=color_ref)
             # print leaf.shape
             ref_leaflets.append(leaf)
-            # ref_leaflets.append(image2gray(leaf))
+            # ref_leaflets.append(rgb_to_grey(leaf))
             # print leaf.shape
             ref_scales.append(scale)
             ref_contours.append(contour)
