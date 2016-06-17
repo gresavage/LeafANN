@@ -1,5 +1,8 @@
-ninputs = 100
+"""
+Created on Sun Oct 18 22:18:10 2015
 
+@author: Tom Gresavage, t-gresavage@onu.edu
+"""
 # Standard Imports
 import os
 import time
@@ -1618,19 +1621,11 @@ class LeafNetwork(object):
 class Contour(object):
     def __init__(self, contour, sigma=1., scale=1., rescale=False, **kwargs):
         self.contour = contour
-        # print 'Contour init'
-        # print np.amax(contour, 0)
         self.rows, self._cols = zip(*contour)
         self.sigma = sigma
         self.scale = scale
-        # print "setting cimage in contour init"
         self.cimage = self.contourtoimg(rescale=rescale).astype(bool)
-        # plt.imshow(self.cimage)
-        # plt.show()
         self.curvature(sigma=self._sigma)
-        # print "after curvature"
-        # print np.amax(self.contour, 0)
-        # print
     def __iter__(self):
         return iter(self._contour)
     @property
@@ -1761,9 +1756,6 @@ class Contour(object):
             self._radii = [np.sqrt(float((self._rows[_]-float(self._centroid[0]))**2.+(self._cols[_]-float(self._centroid[1]))**2.)) for _ in range(len(self._contour))]
         return self._radii
     def orient(self, smoothed=True, sigma=1., **kwargs):
-        # print "orient"
-        # print "using sigma=", sigma
-        # print "sigma=self.sigma", sigma==self.sigma
         visualize = kwargs.get('visualize', False)
         rescale = kwargs.get('rescale', True)
         resize = kwargs.get('resize', True)
@@ -1785,14 +1777,8 @@ class Contour(object):
         angles = self.getangles(smoothed=smoothed, sigma=sigma)
         angle = angles[index]
         length = self.__len__
-        # print "angle offset"
-        # print angle
         angles = angles - angle + np.pi/2.
         self._angles = angles
-        # print "angles max/min"
-        # print np.max(angles)
-        # print np.min(angles)
-        # print
         curve = [(self._radii[_]*np.sin(self._angles[_]), self._radii[_]*np.cos(self._angles[_])) for _ in range(length)]
         dimspan = np.ptp(curve, 0)
         dimmax = np.amax(curve, 0)
@@ -1801,63 +1787,17 @@ class Contour(object):
 
 
         self.cimage = tf.rotate(self.cimage, -angle*180./np.pi+90., resize=True).astype(bool)
-        # print "Still 64x64?: ", self.cimage.shape[0] == 64 and self.cimage.shape[1] == 64
-        # print self.cimage.shape
         self.cimage, scale, contour = iso_leaf(self.cimage, True)
-        # self.cimage = tf.rotate(self.cimage, angle*180./np.pi, resize=True).astype(bool)
-        # plt.imshow(img)
-        # plt.show()
-        # print "Resizing to preserve 64x64"
-        # print img.shape
         self.image = tf.rotate(self.image, -angle*180./np.pi+90., resize=True)
         self.image = imresize(self.image, scale, interp="bicubic")
         self.scale *= scale
-        # self.cimage = rotate(self.cimage, -angle*180./np.pi).astype(bool)
-        # print "cimage after reorientation"
-        # plt.imshow(self.cimage)
-        # plt.show()
-        # np.pad(self.cimage)
         curve1 = parametrize(self.cimage)
-        # print "s"
-        # self.contourtoimg(rescale=True)
-
-        # Scale contour by scaling factor. Set 0 index to be top of leaflet
         length = len(curve)
         curve = [curve[(index+_)%length] for _ in range(length)]
-        # print "Oriented cimage"
-        # plt.imshow(self.cimage)
-        # plt.show()
-        # print "curve 1 from contourtoimg"
         c1img = np.zeros_like(self.cimage)
         for c in curve1:
             c1img[c] = True
-        # img = self.contourtoimg(curve1, rescale=True)
-        # plt.imshow(c1img)
-        # plt.show()
-        #
-        # try:
-        #     print "Int of centroids"
-        #     curve = [(int(np.round(c[0])), int(np.round(c[1]))) for c in curve]
-        #     img = self.contourtoimg(curve, rescale=True)
-        #     plt.imshow(img)
-        #     plt.show()
-        #     print "contour to img of curve1"
-        #     img = self.contourtoimg(curve1, rescale=True)
-        #     plt.imshow(img)
-        #     plt.show()
-        #     print
-        # except ValueError:
-        #     print "ValueError"
-        #     img = self.contourtoimg(curve1, rescale=False)
-        #     plt.imshow(img)
-        #     plt.show()
-        #     img = self.contourtoimg(curve, rescale=False)
-        #     plt.imshow(img)
-        #     plt.show()
         self.cimage = c1img
-        # print 'orient'
-        # print np.amax(self._contour)
-
         self.getangles(smoothed=smoothed, sigma=sigma)
         self.smooth(sigma=sigma)
         self.curvature(sigma=sigma)
@@ -1884,7 +1824,6 @@ class Contour(object):
         plt.imshow(img)
         plt.show()
     def smooth(self, sigma=1.):
-        # self._sigma = kwargs.get('sigma', 1.)
         self._sigma = sigma
         self._smooth_rows = tuple(gaussian_filter1d(self._rows, self._sigma, order = 0, mode='wrap'))
         self._smooth_cols = tuple(gaussian_filter1d(self._cols, self._sigma, order = 0, mode='wrap'))
@@ -2015,7 +1954,8 @@ class Leaf(Contour):
         size = np.ceil(1./default_freq)
         i = 0
         if np.random.randint(0, size) == 0:
-            if verbose: print "Returning self"
+            if verbose:
+                print "Returning self"
             return self, 1.
         while True:
             i+=1
@@ -2110,39 +2050,13 @@ class Leaf(Contour):
         return data, target, weights
 
 def test(pickled):
-    minticks = 10
-    scaleunits = 'mm'
-    minsegmentarea = 0.1
-    itermagnification = 2
-    debug = False
-    width, height = 0, 0 #dimensions of grey_image
     if not pickled:
         # Read Images
         dir = os.path.dirname(__file__)
         ref_im_file = os.path.join(dir, "../images/TEST/reference.jpg")
-        # query_im_file = os.path.join(dir, "../images/TEST/query.jpg")
 
         grey_ref = sp_imread(ref_im_file, flatten=True)
         color_ref = sp_imread(ref_im_file)
-
-        # grey_query = sp_imread(query_im_file, flatten=True)
-        # color_query = sp_imread(query_im_file)
-
-        # grey_hpixels, grey_wpixels = grey_ref.shape
-        x = [1, 2, 3]
-        y = ['a', 'b', 'c']
-        z = zip(x,y)
-        print zip(*z)
-
-
-        # Get image size properties
-        if width==0 or height==0:
-            grey_scale = get_scale(grey_ref, minticks, scaleunits)
-        else:  # width and height in cm specified by user, don't need to calculate scale
-            found = True
-            # The scale should be the same calculated from the width or the height, but average the two,
-            # just in case there is some small discrepency.
-            grey_scale = (width/float(n) + height/float(m)) * 0.5
 
         print "Segmenting Ref"
         segmented_ref = segment(grey_ref, color_ref, ref_im_file, 50, itermagnification=2, debug=False, scale=grey_scale, minsegmentarea=0.1, datadir="./")
@@ -2153,16 +2067,13 @@ def test(pickled):
         ref_contours = []
 
         for i in range(segmented_ref[3]):
-            # print i
             leaf, scale, contour = iso_leaf(segmented_ref[0], i+1, ref_image=color_ref)
-            # print leaf.shape
             ref_leaflets.append(leaf)
-            # ref_leaflets.append(rgb_to_grey(leaf))
-            # print leaf.shape
             ref_scales.append(scale)
             ref_contours.append(contour)
             ref_names.append("leaflet %r" % i)
 
+        # False leaflet
         ref_leaflets.pop(6)
         ref_scales.pop(6)
         ref_contours.pop(6)
@@ -2176,24 +2087,19 @@ def test(pickled):
         cPickle.dump(inputs, open("inputdump.p", "wb"))
         cPickle.dump(inputs2D, open("input2Ddump.p", "wb"))
         cPickle.dump(targets, open("targetdump.p", "wb"))
-        cPickle.dump(weights, open("weightdump.p", "wb"))
     else:
         data        = cPickle.load(open("leafdump.p", "rb"))
         inputs      = cPickle.load(open("inputdump.p", "rb"))
         inputs2D    = cPickle.load(open("input2Ddump.p", "rb"))
         targets     = cPickle.load(open("targetdump.p", "rb"))
-        weights     = cPickle.load(open("weightdump.p", "rb"))
-    print "Sigma: ", data.sigma
-    inputs = np.asarray(inputs)
 
-    print
+    inputs = np.asarray(inputs)
     targets = np.asarray(targets)
-    weights = np.ones_like(weights)
 
     pickled = False
     if pickled:
-        print "Net Loaded"
         LeafNet =cPickle.load(open("netdump.p", "rb"))
+        print "Net Loaded"
     else:
         print 'Building Network'
         LeafNet = LeafNetwork(inputs, inputs2D, targets, data.leaves[0].color_image)
@@ -2202,14 +2108,10 @@ def test(pickled):
         pickled = True
 
 if __name__=='__main__':
-    # pickled = False
     pickled = True
-    # while True:
+    # pickled = False
     if pickled:
         data = cPickle.load(open("leafdump.p", "rb"))
         inputs = cPickle.load(open("inputdump.p", "rb"))
         targets = cPickle.load(open("targetdump.p", "rb"))
-        weights = cPickle.load(open("weightdump.p", "rb"))
-        # LeafNet = cPickle.load(open("netdump.p", "wb"))
-
-    pickled = test(pickled)
+        LeafNet = cPickle.load(open("netdump.p", "wb"))
