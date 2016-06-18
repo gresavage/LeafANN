@@ -485,13 +485,13 @@ class LeafNetwork(object):
             raise
 
         try:
-            self.statdir = os.path.join(self.netdir, '../stats/'+str(logtime))
+            self.statdir = os.path.join(self.netdir, '../stats/' + str(logtime))
             os.makedirs(self.statdir)
         except:
             raise
 
         try:
-            self.datadir = os.path.join(self.netdir, '../data/'+str(logtime))
+            self.datadir = os.path.join(self.netdir, '../data/' + str(logtime))
             os.makedirs(self.datadir)
         except:
             raise
@@ -502,17 +502,22 @@ class LeafNetwork(object):
         # self._data1D = new_data
         # self._data2D = data2D
         # self._targets = targets
-        X_train, X_train2D, y_train, X_val, X_val2D, y_val = self.split_data(data1D=new_data, data2D=data2D, targets=targets, train_prop=train_prop, shuffle=shuffle)
+        X_train, X_train2D, y_train, X_val, X_val2D, y_val = self.split_data(data1D=new_data, data2D=data2D,
+                                                                             targets=targets, train_prop=train_prop,
+                                                                             shuffle=shuffle)
 
         if name is None:
             self.__name__ = str(logtime) + "__" + str(self._n_conv) + "CLayers_" + str(self._n_dense) + "DLayers"
 
         else:
             self.__name__ = name
-        self.create_layers(n_1Dfilters=self._n_1Dfilters, n_2Dfilters=self._n_2Dfilters, n_conv=self._n_conv, n_dense=self._n_dense, nonlinearity=nonlinearity,
+        self.create_layers(n_1Dfilters=self._n_1Dfilters, n_2Dfilters=self._n_2Dfilters, n_conv=self._n_conv,
+                           n_dense=self._n_dense, nonlinearity=nonlinearity,
                            freeze_autoencoder=freeze_autoencoder, verbose=verbose,
                            verbosity=verbosity, **kwargs)
-        self.train_network(X_train=X_train, X_train2D=X_train2D, y_train=y_train, X_val=X_val, X_val2D=X_val2D, y_val=y_val, num_epochs=num_epochs, stop_err=stop_err, d_stable=d_stable, n_stable=n_stable, learning_rate=learning_rate, beta_1=beta_1, beta_2=beta_2, epsilon=epsilon,
+        self.train_network(X_train=X_train, X_train2D=X_train2D, y_train=y_train, X_val=X_val, X_val2D=X_val2D,
+                           y_val=y_val, num_epochs=num_epochs, stop_err=stop_err, d_stable=d_stable, n_stable=n_stable,
+                           learning_rate=learning_rate, beta_1=beta_1, beta_2=beta_2, epsilon=epsilon,
                            verbose=verbose, plotting=plotting, verbosity=verbosity, save_plots=save_plots,
                            pretrain=pretrain, **kwargs)
         return self
@@ -968,7 +973,8 @@ class LeafNetwork(object):
             print "Done"
         print
 
-    def train_network(self, X_train=None, X_train2D=None, y_train=None, X_val=None, X_val2D=None, y_val=None, num_epochs=1000, stop_err=0.01, d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9,
+    def train_network(self, X_train=None, X_train2D=None, y_train=None, X_val=None, X_val2D=None, y_val=None,
+                      num_epochs=1000, stop_err=0.01, d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9,
                       beta_2=0.999, epsilon=10e-8, pretrain=True, plotting=False, save_plots=False, **kwargs):
         """
         A function to  be called when the network is ready to be trained.
@@ -1587,7 +1593,7 @@ class LeafNetwork(object):
                 epochs.update({"Dense": i + 1})
                 flags.update({"Dense": True})
         self.epochs = epochs
-        logging.debug("All networks trained: %s" %(flags.values().all()))
+        logging.debug("All networks trained: %s" % (flags.values().all()))
         logging.debug("Training complete")
         logging.debug("Total time: %s" % NetTrain_time)
         logging.debug("Epochs: %s" % i)
@@ -1661,14 +1667,17 @@ class LeafNetwork(object):
                     except IndexError:
                         pass
                 time_writer.writerow(row)
-        statheader = ['Network', 'Mean Error', 'Median Error', 'Error Variance', 'Max Error', 'Min Error', 'Mean Time', 'Median Time', 'Time Variance', 'Max Time', 'Min Time', 'Total Time', "Epochs"]
+        statheader = ['Network', 'Mean Error', 'Median Error', 'Error Variance', 'Max Error', 'Min Error', 'Mean Time',
+                      'Median Time', 'Time Variance', 'Max Time', 'Min Time', 'Total Time', "Epochs"]
         with open(statfile, 'wb') as statfile:
             stat_writer = csv.writer(statfile)
             stat_writer.writerow(statheader)
             for key in errors.keys():
                 error = errors(key)
                 time = times(key)
-                row = [key, np.mean(error), np.median(error), np.var(error), np.max(error), np.min(error), np.mean(time), np.median(time), np.var(time), np.max(time), np.min(time), np.sum(time), epochs(key)]
+                row = [key, np.mean(error), np.median(error), np.var(error), np.max(error), np.min(error),
+                       np.mean(time), np.median(time), np.var(time), np.max(time), np.min(time), np.sum(time),
+                       epochs(key)]
                 stat_writer.writerow(row)
 
         if plotting or save_plots:
@@ -1781,7 +1790,8 @@ class LeafNetwork(object):
         else:
             return diff.all()
 
-    def split_data(self, data1D=None, data2D=None, targets=None, train_prop=0.75, shuffle=True, verbose=False, **kwargs):
+    def split_data(self, data1D=None, data2D=None, targets=None, train_prop=0.75, shuffle=True, verbose=False,
+                   **kwargs):
         """
         Splits the data into train_prop% training and 1-train_prop% validation data. Stores the split data in the data directory.
         :param data1D:      3D array of floats, optional
@@ -2168,7 +2178,7 @@ class LeafNetwork(object):
                         errors[batch, id, :] = self.get_error(prediction, targets[batch], relative, epsilon)
         if feedback:
             try:
-                feedbackdir = os.makedirs(os.path.join(self.netdir, "../feedback/"+self.logtime))
+                feedbackdir = os.makedirs(os.path.join(self.netdir, "../feedback/" + self.logtime))
             except:
                 raise
             for i in range(batch_size):
