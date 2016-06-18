@@ -18,60 +18,6 @@ from scipy.ndimage.filters import sobel, gaussian_filter, gaussian_filter1d
 from leafarea import *
 from image_processing import *
 
-# Kernel for erosion and dilation
-se = np.ones((3,3))
-
-
-def curvature(contour, sigma=1., **kwargs):
-    """
-    Computes the curvature at each point along the edge of a contour
-    :param contour:     list of tuples,
-                        list of (x,y) coordinates defining a contour
-    :param sigma:       float, optional
-                        Width of the gaussian kernel to be convolved along the contour.
-    :return: k:         list of floats,
-                        list of curvature values along the contour
-    """
-    rows, cols = zip(*contour)
-    x = [float(x) for x in cols]
-    y = [float(y) for y in rows]
-
-    xu = gaussian_filter1d(x, sigma, order=1, mode='wrap')
-    yu = gaussian_filter1d(y, sigma, order=1, mode='wrap')
-
-    xuu = gaussian_filter1d(xu, sigma, order=1, mode='wrap')
-    yuu = gaussian_filter1d(yu, sigma, order=1, mode='wrap')
-
-    k = [(xu[i] * yuu[i] - yu[i] * xuu[i]) / np.power(xu[i] ** 2. + yu[i] ** 2., 1.5) for i in range(len(xu))]
-    if kwargs.get('visualize', False):
-        plt.plot(k)
-        plt.show()
-    return k
-
-def get_scale(leafimage, minticks, scaleunits):
-    """
-    Takes a leaf image and searches for tickmarks to determine the units of scale. Averages the distance between the
-    center of the tickmarks.
-    :param leafimage: ndimage,
-                Image containing leaf and tickmarks to be searched over
-    :param minticks: int,
-                Minimum number of ticks required to determine a scale
-    :param scaleunits: string,
-                Units that each tick mark represents
-    :return: scale,
-                scale: float,
-                        scale of the current image
-    """
-    n, m = leafimage.shape
-    
-    scale, found, edge = metricscale(leafimage, minticks, scaleunits)
-    if not found:   # try to find a scale after histogram equalization
-        scale, found, edge = metricscale(leafimage, minticks, scaleunits, True, False)
-
-    if not found:   # try to find a scale after Gaussian blur
-        scale, found, edge = metricscale(leafimage, minticks, scaleunits, False, True)
-    return scale
-
 def squaredim(image, shape=(100, 100)):
     """
     Squares an image to the specified shape
@@ -116,11 +62,12 @@ def iso_leaf(segmented_image, leaf_num, square_length=64, ref_image=None, rescal
     rows, cols = np.where(segmented_image == leaf_num)
     left = np.min(cols)
     top = np.min(rows)
+    # Set the dimensions to be the max between the row and column ranges
     dimspan = max(np.ptp(zip(rows, cols), 0))
 
     if ref_image is not None:
         ref_image = ref_image.astype(float)
-        leaflet = np.zeros(ref_image.shape, float)
+        leaflet = np.ones(ref_image.shape, float)
         for p in zip(rows, cols):
             leaflet[p] = ref_image[p]
         leaflet = leaflet[top:(top+dimspan+1), left:(left+dimspan+1)]
@@ -136,7 +83,10 @@ def iso_leaf(segmented_image, leaf_num, square_length=64, ref_image=None, rescal
     contour = np.zeros(segmented_image.shape[:2], bool)
     for c in zip(rows, cols):
         contour[c] = True
-    contour = contour[top:(top + dimspan + 1), left:(left + dimspan + 1)]
+
+    contour = contour[top-1:(top + dimspan + 1), left-1:(left + dimspan + 1)]
+    contour = parametrize(contour)
+
     padding = [square_length - leaflet.shape[0]-1, square_length - leaflet.shape[1]-1]
     if padding[0] >= 0 or padding[1] >= 0:
         if ref_image is not None:
@@ -167,7 +117,7 @@ def iso_leaf(segmented_image, leaf_num, square_length=64, ref_image=None, rescal
             leaflet = padded
     else:
         print "Negative Padding"
-    return leaflet, scale
+    return leaflet, scale, contour
 
 
 def general_hough_closure(reference_image, **kwargs):
@@ -236,7 +186,7 @@ def build_r_table(image, origin, polar=True, cornering=False):
                  r_table[gradient[i,j]].append((origin[0]-i, origin[1]-j))
     return r_table
 
-def accumulate_gradients(r_table, grey_image, angles=np.linspace(-(0.9)*np.pi/2., (0.9)*np.pi/2., 20), scales=np.linspace(3./4., 1.25, 20), polar=True, normalizing=True, cornering=False, gradient_weight=False, curve_weight=False, show_progress=True, verbose=True):
+def accumulate_gradients(r_table, grey_image, scales=np.linspace(0.5, 1.5, 20), angles=np.linspace(-(0.9)*np.pi/2., (0.9)*np.pi/2., 20), polar=True, normalizing=True, cornering=False, gradient_weight=False, curve_weight=False, show_progress=True, verbose=True):
 
     """
     Fill the accumulator using the r_table to determine candidate object locations
@@ -293,7 +243,7 @@ def accumulate_gradients(r_table, grey_image, angles=np.linspace(-(0.9)*np.pi/2.
         if verbose:
             print "Edge Pixels: %r"%(scanning_pixels)
 
-    accumulator = np.zeros((grey_image.shape[0], grey_image.shape[1], len(angles), len(scales)))
+    accumulator = np.zeros((grey_image.shape[0], grey_image.shape[1], len(scales), len(angles)))
     pixels_scanned = 0
     '''
     Net inputs: i, j, theta, rho, i*cos(theta), i*sin(theta), j*cos(theta), j*sin(theta)
@@ -306,6 +256,7 @@ def accumulate_gradients(r_table, grey_image, angles=np.linspace(-(0.9)*np.pi/2.
         pixels_scanned += 1
         if verbose:
             if pixels_scanned == query_edges.shape[0]*query_edges.shape[1]:
+            # if pixels_scanned == np.dot(accumulator.shape):
                 print "Image Scanned"
                 break
             elif pixels_scanned % 10e2 == 0:
@@ -331,18 +282,18 @@ def accumulate_gradients(r_table, grey_image, angles=np.linspace(-(0.9)*np.pi/2.
                         accum_j, accum_i = int(float(j)-(xp*np.cos(angles[a])+yp*np.sin(angles[a]))*scales[s]), int(float(i)+(xp*np.sin(angles[a])-yp*np.cos(angles[a]))*scales[s])
                         if (0 <= accum_i < accumulator.shape[0]) and (0 <= accum_j < accumulator.shape[1]):
                             if gradient_weight:
-                                accumulator[accum_i, accum_j, a, s] += gradient[i, j]
+                                accumulator[accum_i, accum_j, s, a] += gradient[i, j]
                             elif curve_weight:
                                 ang = np.arctan2(-i+query_cont.centroid[0], j-query_cont.centroid[1])
-                                accumulator[accum_i, accum_j, a, s] += query_cont.curvatures[query_cont.extractpoint(ang)]
+                                accumulator[accum_i, accum_j, s, a] += query_cont.curvatures[query_cont.extractpoint(ang)]
                             else:
-                                accumulator[accum_i, accum_j, a, s] += 1 + gradient[i, j]
+                                accumulator[accum_i, accum_j, s, a] += 1 + gradient[i, j]
             if show_progress:
                 pixels_scanned+=1
                 pbar.update(pixels_scanned)
     if show_progress:
         pbar.finish()
-    return accumulator, angles, scales
+    return accumulator, scales, angles
 
 def test_general_hough(gh, reference_image, query_image, path, query_index=0):
     '''
@@ -425,6 +376,7 @@ def test():
     query_im_file = os.path.join(dir, "../images/TEST/query.jpg")
     
     grey_ref = sp_imread(ref_im_file, flatten=True)
+    scale, found, edge = metricscale(grey_ref, 10, 'cm')
     color_ref = sp_imread(ref_im_file)
     
 
@@ -454,12 +406,14 @@ def test():
     ref_leaflets = []
     # Isolate the individual leaflets in the ref and the query images
     for i in range(segmented_ref[3]):
-
-        ref_leaflets.append(imresize(iso_leaf(segmented_ref[0], i+1), 7, interp='nearest'))
+        # ref_leaflets.append(imresize(iso_leaf(segmented_ref[0], i+1), 7, interp='nearest'))
+        ref_leaflets.append(iso_leaf(segmented_ref[0], i+1))
+        print "Ref_leaflets %s shape" %i
+        print ref_leaflets[-1].shape
+        print
     for i in range(segmented_query[3]):
-
-        query_leaflets.append(imresize(iso_leaf(segmented_query[0], i+1), 7, interp='nearest'))
-
+        # query_leaflets.append(imresize(iso_leaf(segmented_query[0], i+1), 7, interp='nearest'))
+        query_leaflets.append(iso_leaf(segmented_query[0], i+1))
         leaf_accumulator = general_hough_closure(ref_leaflets[0]) #gh function
         test_general_hough(leaf_accumulator, ref_leaflets[0], query_leaflets[i], query_im_file, query_index=i)
 

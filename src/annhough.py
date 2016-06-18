@@ -5,6 +5,7 @@ Created on Sun Oct 18 22:18:10 2015
 """
 # Standard Imports
 import os
+import sys
 import csv
 import logging
 import time
@@ -307,7 +308,7 @@ class TrainingData:
             new_leaf = padded
             try:
                 new_leaf = Leaf(new_leaf, contour=leaf_c, scale=scale, sigma=leaf.sigma, orient=False, rescale=False,
-                                name='eaten leaf %r of %r' % (size, leaf.__name__))
+                                name='eaten leaf %s of %s' % (size, leaf.__name__))
             except TypeError:
                 print "TypeError"
                 print leaf.__name__
@@ -457,8 +458,10 @@ class LeafNetwork(object):
             new_data[i, 0, :] = data1D[i, :]
 
         # self._n_conv = n_conv
-        self._n_conv = 3
+        # self._n_conv = 3
+        self._n_conv = 2
         # self._n_dense = n_dense
+        # self._n_dense = 2
         self._n_dense = 2
         try:
             iter(n_1Dfilters)
@@ -470,20 +473,22 @@ class LeafNetwork(object):
             n_2Dfilters = [n_2Dfilters]
 
         # self._n_1Dfilters = list(n_1Dfilters)
-        self._n_1Dfilters = [8]
+        # self._n_1Dfilters = [8]
+        self._n_1Dfilters = [2]
         # self._n_2Dfilters = list(n_2Dfilters)
-        self._n_2Dfilters = [8]
+        # self._n_2Dfilters = [8]
+        self._n_2Dfilters = [2]
 
         self.netdir = os.path.dirname(__file__)
         try:
-            logtime = time.time()
-            self.logdir = os.path.join(self.netdir, '../logs/' + str(logtime))
+            self.logtime = time.time()
+            self.logdir = os.path.join(self.netdir, '../logs/' + str(self.logtime))
             os.makedirs(self.logdir)
         except:
             raise
 
         try:
-            self.statdir = os.path.join(self.netdir, '../stats/' + str(logtime))
+            self.statdir = os.path.join(self.netdir, '../stats/' + str(self.logtime))
             os.makedirs(self.statdir)
         except:
             raise
@@ -502,7 +507,7 @@ class LeafNetwork(object):
                                                                              shuffle=shuffle)
 
         if name is None:
-            self.__name__ = str(logtime) + "__" + str(self._n_conv) + "CLayers_" + str(self._n_dense) + "DLayers"
+            self.__name__ = str(self.logtime) + "__" + str(self._n_conv) + "CLayers_" + str(self._n_dense) + "DLayers"
         else:
             self.__name__ = name
         self.create_layers(n_1Dfilters=self._n_1Dfilters, n_2Dfilters=self._n_2Dfilters, n_conv=self._n_conv,
@@ -514,7 +519,6 @@ class LeafNetwork(object):
                            learning_rate=learning_rate, beta_1=beta_1, beta_2=beta_2, epsilon=epsilon,
                            verbose=verbose, plotting=plotting, verbosity=verbosity, save_plots=save_plots,
                            pretrain=pretrain, **kwargs)
-        return self
 
     def create_layers(self, n_1Dfilters=2, n_2Dfilters=6, n_conv=2, n_dense=3, nonlinearity='tanh',
                       freeze_autoencoder=False, nets=None, pretrain=True, **kwargs):
@@ -1011,28 +1015,38 @@ class LeafNetwork(object):
         :return: nets:      dict,
                             A dictionary containing the various networks which were trained.
         """
+
+        logfile = os.path.join(self.logdir, "train_network.log")
+        logging.basicConfig(filename=logfile, level=logging.DEBUG)
+        logging.debug('Setting up training variables')
+
         if X_train is None:
+            logging.debug("No 'X_train' data specified... loading pickled data.")
             X_train = cPickle.load(open(os.path.join(self.datadir, "X_train.pkl"), "rb"))
         if X_train2D is None:
+            logging.debug("No 'X_train2D' data specified... loading pickled data.")
             X_train2D = cPickle.load(open(os.path.join(self.datadir, "X_train2D.pkl"), "rb"))
         if y_train is None:
+            logging.debug("No 'y_train' data specified... loading pickled data.")
             y_train = cPickle.load(open(os.path.join(self.datadir, "y_train.pkl"), "rb"))
         if X_val is None:
+            logging.debug("No 'X_val' data specified... loading pickled data.")
             X_val = cPickle.load(open(os.path.join(self.datadir, "X_val.pkl"), "rb"))
         if X_val2D is None:
+            logging.debug("No 'X_val2D' data specified... loading pickled data.")
             X_val2D = cPickle.load(open(os.path.join(self.datadir, "X_val2D.pkl"), "rb"))
         if y_val is None:
+            logging.debug("No 'y_val' data specified... loading pickled data.")
             y_val = cPickle.load(open(os.path.join(self.datadir, "y_val.pkl"), "rb"))
 
         verbose = kwargs.get('verbose', False)
         verbosity = kwargs.get('verbosity', 3)
-        logfile = os.path.join(self.logdir, "train_network.log")
-        logging.basicConfig(filename=logfile, level=logging.DEBUG)
-        logging.debug('Setting up training variables')
+
         errorfile = os.path.join(self.statdir, "training_errors.csv")
         timefile = os.path.join(self.statdir, "training_times.csv")
         statfile = os.path.join(self.statdir, "training_stats.csv")
         num_epochs = int(num_epochs)
+        # num_epochs = int(10)
         self.d_stable = d_stable
         self.n_stable = n_stable
         errors = defaultdict(list)
@@ -1469,7 +1483,7 @@ class LeafNetwork(object):
             if not flags["Conv2D"]:
                 epochs.update({"Conv2D": i + 1})
                 flags.update({"Conv2D": True})
-        if 1 in self.__nets__::
+        if 1 in self.__nets__:
             if not flags["DConv"]:
                 epochs.update({"DConv": i + 1})
                 flags.update({"DConv": True})
@@ -1478,6 +1492,7 @@ class LeafNetwork(object):
                 epochs.update({"Dense": i + 1})
                 flags.update({"Dense": True})
         self.epochs = epochs
+
         logging.debug("All networks trained: %s" % (all(flags.values())))
         logging.debug("Training complete")
         logging.debug("Total time: %s" % NetTrain_time)
@@ -1517,9 +1532,12 @@ class LeafNetwork(object):
             print "##" * 50
             print "##" * 50
             print "##" * 50
-        header = ['Epoch'].extend(epochs.keys())
+
+        logging.debug("Writing errors to csv file: %s" %(errorfile))
+        # header = ['Epoch']
+        header = epochs.keys()
         with open(errorfile, 'wb') as errorfile:
-            error_writer = csv.writer(errorfile)
+            error_writer = csv.writer(errorfile, quoting=csv.QUOTE_ALL)
             error_writer.writerow(header)
             for i in range(num_epochs):
                 row = [i]
@@ -1527,10 +1545,12 @@ class LeafNetwork(object):
                     try:
                         row.append(errors[key][i])
                     except IndexError:
-                        pass
+                        row.append("")
                 error_writer.writerow(row)
+
+        logging.debug("Writing times to csv file: %s" %(timefile))
         with open(timefile, 'wb') as timefile:
-            time_writer = csv.writer(timefile)
+            time_writer = csv.writer(timefile, quoting=csv.QUOTE_ALL)
             time_writer.writerow(header)
             for i in range(num_epochs):
                 row = [i]
@@ -1538,12 +1558,14 @@ class LeafNetwork(object):
                     try:
                         row.append(times[key][i])
                     except IndexError:
-                        pass
+                        row.append("")
                 time_writer.writerow(row)
+
+        logging.debug("Writing stats to csv file: %s" % (statfile))
         statheader = ['Network', 'Mean Error', 'Median Error', 'Error Variance', 'Max Error', 'Min Error', 'Mean Time',
                       'Median Time', 'Time Variance', 'Max Time', 'Min Time', 'Total Time', "Epochs"]
         with open(statfile, 'wb') as statfile:
-            stat_writer = csv.writer(statfile)
+            stat_writer = csv.writer(statfile, quoting=csv.QUOTE_ALL)
             stat_writer.writerow(statheader)
             for key in errors.keys():
                 _error = errors[key]
@@ -1558,6 +1580,7 @@ class LeafNetwork(object):
             stat_writer.writerow(['Total Time', Total_time])
 
         if plotting or save_plots:
+            logging.debug("Generating plots")
             if 0 in self.__nets__ and 2 in self.__nets__:
                 plt.title(fill("MLP and 1-D Unpretrained Convolutional Network Training and Validation Error", 45))
                 plt.plot(errors["DConv"], 'g', label='Convolutional, Training')
@@ -1568,6 +1591,7 @@ class LeafNetwork(object):
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
                 if save_plots:
+                    logging.debug("Saving plot of MLP/Convolutional comparison")
                     dir = os.path.dirname(__file__)
                     name = self.__name__ + "__" + str(time.time())
                     figfile = os.path.join(dir, "../plots/" + name + "_MLPconvcompare.png")
@@ -1584,6 +1608,7 @@ class LeafNetwork(object):
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
                 if save_plots:
+                    logging.debug("Saving plot of 1D convolutional training and validation error")
                     figfile = os.path.join(dir, "../plots/" + name + "_1Dconvnet.png")
                     plt.savefig(figfile)
                 if plotting:
@@ -1624,23 +1649,27 @@ class LeafNetwork(object):
                                                  layers.get_output(self.Conv2DLayers, deterministic=True),
                                                  name="2D Convolutional Network")})
 
-        data2, target = data2D[:2], targets[:2]
-        print "Test"
-        print "Expected: ", target
-        predictions, networks, errors, coordinates = self.solve(
+        data2, target = X_train2D[:20], y_train[:20]
+        # print "Test"
+        # print "Expected: ", target
+        predictions, networks, coordinates, errors = self.solve(
             input2D=self.shape_data2D(data2, channel_axis=1, batch_axis=0, batched=True), targets=target, network_ids=3)
-        print "Predictions: ", predictions
-        print "Networks: ", networks
-        print "Errors: ", errors
-        example = rgb_to_grey(data2[0])
-        plt.imshow(example, alpha=0.5)
-        overlay = rotate(example, 180. * coordinates[0][2] / np.pi, reshape=False)
-        overlay = zoom(overlay, coordinates[0][3])
-        overlay = shift(overlay, coordinates[0][:2])
-        # example = np.zeros((64, 64, 3), dtype=float)
-        # example[:, :, 1] = overlay
-        plt.imshow(overlay, alpha=0.5)
-        plt.show()
+        # print "Predictions: ", predictions
+        # print "Networks: ", networks
+        # print "Errors: ", errors
+        # print "Coordinates"
+        # print coordinates[0]
+        # print coordinates
+        # print
+        # example = rgb_to_grey(data2[0])
+        # plt.imshow(example, alpha=0.5)
+        # overlay = rotate(example, 180. * coordinates[0][2] / np.pi, reshape=False)
+        # overlay = zoom(overlay, coordinates[0][3])
+        # overlay = shift(overlay, coordinates[0][:2])
+        # # example = np.zeros((64, 64, 3), dtype=float)
+        # # example[:, :, 1] = overlay
+        # plt.imshow(overlay, alpha=0.5)
+        # plt.show()
         return self.nets
 
     def stablecheck(self, error_list):
@@ -1785,8 +1814,6 @@ class LeafNetwork(object):
             raise ValueError("Image pixel values are outside accepted range. Max value %r must be less than 1." % (m))
         elif n < 0.:
             raise ValueError("Image pixel values are outside accepted range. Min value %r must be nonnegative" % (n))
-
-        cPickle.dump(reshaped, os.path.join(self.datadir, "data2D.pkl"), "wb")
         return reshaped
 
     def shape_data1D(self, data1D=None, batched=False, batch_axis=0):
@@ -1834,7 +1861,6 @@ class LeafNetwork(object):
                     axes.append(i)
             data1D.reshape((data1D.shape[batch_axis], data1D.shape[axes[channel_axis]], data1D.shape[axes[0]]))
             reshaped = data1D
-        cPickle.dump(reshaped, os.path.join(self.datadir, "data1D.pkl"), "wb")
         return reshaped
 
     def to_output(self, x):
@@ -2047,33 +2073,47 @@ class LeafNetwork(object):
                         errors[batch, id, :] = self.get_error(prediction, targets[batch], relative, epsilon)
         if feedback:
             try:
-                feedbackdir = os.makedirs(os.path.join(self.netdir, "../feedback/" + self.logtime))
+                self.feedbackdir = os.path.join(self.netdir, "../feedback/" + str(self.logtime))
+                os.makedirs(self.feedbackdir)
             except:
                 raise
             for i in range(batch_size):
                 scale = np.mean(predictions[i, :, 0])
-                scales = np.linspace(scale - .2, scale + .2, 10)
+                scales = np.linspace(max(sys.float_info.epsilon, scale - .2), scale + .2, 10)
                 angle = np.mean(predictions[i, :, 1])
                 angles = np.linspace(angle - 0.2 * np.pi, angle + 0.2 * np.pi, 10)
                 accumulator = general_hough_closure(self.ref_image, angles=angles, scales=scales, show_progress=False)
-                acc_array, angles, scales = accumulator(input2D[i])
-                y, x, a, s = np.unravel_index(acc_array.argmax(), acc_array.shape)
-                dy, dx = y - self.ref_image.shape[0], x - self.ref_image.shape[1]
-                coordinates.append((dy, dx, scales[s], angles[a]))
-
+                acc_array, scales, angles = accumulator(input2D[i])
+                y, x, s, a = np.unravel_index(acc_array.argmax(), acc_array.shape)
+                dy, dx = y, x
+                # coordinates.append((dy, dx, scales[s], angles[a]))
+                coordinates.append((y, x, scales[s], angles[a]))
+                print "Coordinates"
+                print coordinates
                 filename = "feedback_" + str(i) + "_" + str(dy) + "_" + str(dx) + "_" + str(
                     angles[a] * 180. / np.pi) + "_" + str(scales[s]) + ".png"
-
-                original = np.copy(input2D[i])
-                original = rgb_to_grey(original)
-                plt.imshow(original, alpha=0.5)
 
                 overlay = np.copy(self.ref_image)
                 overlay = zoom(overlay, scales[s])
                 overlay = rotate(overlay, angles[a], reshape=False)
                 overlay = shift(overlay, (dy, dx))
+                y_crop = slice(max(0, overlay.shape[0]/2-self._input2D_shape[0]/2), max(overlay.shape[0]/2+self._input2D_shape[0]/2, overlay.shape[0]))
+                x_crop = slice(max(0, overlay.shape[1]/2-self._input2D_shape[1]/2), max(overlay.shape[1]/2+self._input2D_shape[1]/2, overlay.shape[1]))
+                print "Overlay shape"
+                print overlay.shape
+                overlay = overlay[y_crop, x_crop]
+                print overlay.shape
                 plt.imshow(overlay, alpha=0.5)
-                plt.savefig(os.path.join(feedbackdir, filename))
+                original = np.copy(input2D[i])
+                original = rgb_to_grey(original)
+                plt.imshow(original, alpha=0.5)
+                # print coordinates[-1]
+                # print coordinates[-1][0]
+                # print coordinates[-1][1]
+                # print coordinates[-1][2]
+                # print coordinates[-1][3]
+                plt.savefig(os.path.join(self.feedbackdir, filename))
+                plt.clf()
         if verbose:
             print "Done"
 
@@ -2604,7 +2644,7 @@ def test(pickled):
             ref_leaflets.append(leaf)
             ref_scales.append(scale)
             ref_contours.append(contour)
-            ref_names.append("leaflet %r" % i)
+            ref_names.append("leaflet %s" % i)
 
         # False leaflet
         ref_leaflets.pop(6)
@@ -2654,7 +2694,6 @@ def test(pickled):
         cPickle.dump(LeafNet, open("netdump.pkl", "wb"))
         print "Done"
         pickled = True
-
 
 if __name__ == '__main__':
     pickled = True

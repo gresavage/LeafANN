@@ -7,6 +7,35 @@ from scipy.ndimage import imread as sp_imread
 from scipy.ndimage.interpolation import shift, zoom, rotate
 from skimage import transform as tf
 
+# Kernel for erosion and dilation
+se = np.ones((3,3))
+
+def curvature(contour, sigma=1., **kwargs):
+    """
+    Computes the curvature at each point along the edge of a contour
+    :param contour:     list of tuples,
+                        list of (x,y) coordinates defining a contour
+    :param sigma:       float, optional
+                        Width of the gaussian kernel to be convolved along the contour.
+    :return: k:         list of floats,
+                        list of curvature values along the contour
+    """
+    rows, cols = zip(*contour)
+    x = [float(x) for x in cols]
+    y = [float(y) for y in rows]
+
+    xu = gaussian_filter1d(x, sigma, order=1, mode='wrap')
+    yu = gaussian_filter1d(y, sigma, order=1, mode='wrap')
+
+    xuu = gaussian_filter1d(xu, sigma, order=1, mode='wrap')
+    yuu = gaussian_filter1d(yu, sigma, order=1, mode='wrap')
+
+    k = [(xu[i] * yuu[i] - yu[i] * xuu[i]) / np.power(xu[i] ** 2. + yu[i] ** 2., 1.5) for i in range(len(xu))]
+    if kwargs.get('visualize', False):
+        plt.plot(k)
+        plt.show()
+    return k
+
 def get_scale(leafimage, minticks, scaleunits):
     """
 
