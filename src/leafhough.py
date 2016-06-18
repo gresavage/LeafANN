@@ -298,7 +298,8 @@ def accumulate_gradients(r_table, grey_image, angles=np.linspace(-(0.9)*np.pi/2.
     '''
     Net inputs: i, j, theta, rho, i*cos(theta), i*sin(theta), j*cos(theta), j*sin(theta)
     '''
-    if show_progress: pbar = ProgressBar(widgets=[Percentage(), Bar()], maxval=scanning_pixels).start()
+    if show_progress:
+        pbar = ProgressBar(widgets=[Percentage(), Bar()], maxval=scanning_pixels).start()
     if verbose:
         print "Entries: ", accumulator.shape[0]*accumulator.shape[1]*accumulator.shape[2]*accumulator.shape[3]
     for (i,j), value in np.ndenumerate(query_edges):
