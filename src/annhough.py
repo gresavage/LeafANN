@@ -1198,8 +1198,10 @@ class LeafNetwork(object):
                     errors("AE2D").append(AE2DTrainer(X_train2D, X_train2D))
                     # AE2DTrain_time.append(time.time() - t)
                     times("AE2D").append(time.time() - t)
-                    logging.debug('Time: %s' % (AE2DTrain_time[-1]))
-                    logging.debug('Error: %s' % (AE2DErr[-1]))
+                    # logging.debug('Time: %s' % (AE2DTrain_time[-1]))
+                    logging.debug('Time: %s' % (times("AE2D")[-1]))
+                    # logging.debug('Error: %s' % (AE2DErr[-1]))
+                    logging.debug('Error: %s' % (errors("AE2D")[-1]))
                     # AE2DValErr.append(AE2DVal_fn(self.X_val2D, self.X_val2D))
                     val_errors("AE2D").append(AE2DVal_fn(X_val2D, X_val2D))
                     # if AE2DErr[-1] < stop_err:
@@ -1209,7 +1211,7 @@ class LeafNetwork(object):
                             print "2-D training converged."
                         epochs.update({"AE2D": i + 1})
                         flags.update({"AE2D": True})
-                        AE2Dflag = True
+                        # AE2Dflag = True
                     # elif self.stablecheck(AE2DErr):
                     elif self.stablecheck(errors("AE2D")):
                         logging.debug('2D error converged')
@@ -1217,19 +1219,23 @@ class LeafNetwork(object):
                             print "2-D error converged before training completed."
                         epochs.update({"AE2D": i + 1})
                         flags.update({"AE2D": True})
-                        AE2Dflag = True
+                        # AE2Dflag = True
                 # if AE1Dflag and AE2Dflag:
                 if flags.values().all():
                     break
                 if verbose:
                     print
+
             AETrain_time = time.time() - AETrain_time
             # if not AE1Dflag:
             if not flags("AE1D"):
+                flags.update({"AE1D": True})
                 epochs.update({"AE1D": i + 1})
             # if not AE2Dflag:
             if not flags("AE2D"):
+                flags.update({"AE2D": True})
                 epochs.update({"AE2D": i + 1})
+
             if verbose and verbosity >= 1:
                 logging.debug('Pretraining completed')
                 logging.debug('Total time: %s' % (AETrain_time))
@@ -1426,8 +1432,10 @@ class LeafNetwork(object):
                 errors("Conv1D").append(Conv1DTrainer(X_train, y_train))
                 # Conv1DTrain_time.append(time.time() - t)
                 times("Conv1D").append(time.time() - t)
-                logging.debug("Time: %s" % Conv1DTrain_time[-1])
-                logging.debug("Error: %s" % Conv1DErr[-1])
+                # logging.debug("Time: %s" % Conv1DTrain_time[-1])
+                logging.debug("Time: %s" % times("Conv1D")[-1])
+                # logging.debug("Error: %s" % Conv1DErr[-1])
+                logging.debug("Error: %s" % errors("Conv1D")[-1])
                 t = time.time()
                 # Conv1DValErr.append(Conv1DVal_fn(self.X_val, self.y_val))
                 val_errors("Conv1D").append(Conv1DVal_fn(X_val, y_val))
@@ -1458,8 +1466,10 @@ class LeafNetwork(object):
                 errors("Conv2D").append(Conv2DTrainer(X_train2D, y_train))
                 # Conv2DTrain_time.append(time.time() - t)
                 times("Conv2D").append(time.time() - t)
-                logging.debug("Time: %s" % Conv2DTrain_time[-1])
-                logging.debug("Error: %s" % Conv2DErr[-1])
+                # logging.debug("Time: %s" % Conv2DTrain_time[-1])
+                logging.debug("Time: %s" % times("Conv2D")[-1])
+                # logging.debug("Error: %s" % Conv2DErr[-1])
+                logging.debug("Error: %s" % errors("Conv2D")[-1])
                 t = time.time()
                 # Conv2DValErr.append(Conv2DVal_fn(self.X_val2D, self.y_val))
                 val_errors("Conv2D").append(Conv2DVal_fn(X_val2D, y_val))
@@ -1471,7 +1481,7 @@ class LeafNetwork(object):
                         print "2-D training converged."
                     epochs.update({"Conv2D": i + 1})
                     flags.update({"Conv2D": True})
-                    Conv2Dflag = True
+                    # Conv2Dflag = True
                 # elif self.stablecheck(Conv2DErr):
                 elif self.stablecheck(errors("Conv2D")):
                     logging.debug("2D error converged")
@@ -1479,7 +1489,7 @@ class LeafNetwork(object):
                         print "2-D error converged before training completed."
                     epochs.update({"Conv2D": i + 1})
                     flags.update({"Conv2D": True})
-                    Conv2Dflag = True
+                    # Conv2Dflag = True
             # if not DConvflag:
             if not flags("DConv"):
                 logging.debug("Training unpretrained convolutional net")
@@ -1490,8 +1500,10 @@ class LeafNetwork(object):
                 errors("DConv").append(DConvTrainer(X_train, y_train))
                 # DConvTrain_time.append(time.time() - t)
                 times("DConv").append(time.time() - t)
-                logging.debug("Time: %s" % DConvTrain_time[-1])
-                logging.debug("Error: %s" % DConvErr[-1])
+                # logging.debug("Time: %s" % DConvTrain_time[-1])
+                logging.debug("Time: %s" % times("DConv")[-1])
+                # logging.debug("Error: %s" % DConvErr[-1])
+                logging.debug("Error: %s" % errors("DConv")[-1])
                 t = time.time()
                 # DConvValErr.append(DConvVal_fn(self.X_val, self.y_val))
                 val_errors("DConv").append(DConvVal_fn(X_val, y_val))
@@ -1523,8 +1535,10 @@ class LeafNetwork(object):
                 errors("Dense").append(DenseTrainer(X_train, y_train))
                 # DenseTrain_time.append(time.time() - t)
                 times("Dense").append(time.time() - t)
-                logging.debug("Time: %s" % DenseTrain_time[-1])
-                logging.debug("Error: %s" % DenseErr[-1])
+                # logging.debug("Time: %s" % DenseTrain_time[-1])
+                logging.debug("Time: %s" % times("Dense")[-1])
+                # logging.debug("Error: %s" % DenseErr[-1])
+                logging.debug("Error: %s" % errors("Dense")[-1])
                 t = time.time()
                 # DenseValErr.append(DenseVal_fn(self.X_val, self.y_val))
                 val_errors("Dense").append(DenseVal_fn(X_val, y_val))
