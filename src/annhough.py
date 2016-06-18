@@ -446,8 +446,6 @@ class LeafNetwork(object):
             data2D.shape)
 
         self.ref_image = rgb_to_grey(ref_image)
-        # print "Ref image shape"
-        # print self.ref_image.shape
         self._input1D_size = data1D.shape[-1]
         self._input2D_shape = data2D.shape[1:]
 
@@ -459,9 +457,9 @@ class LeafNetwork(object):
             new_data[i, 0, :] = data1D[i, :]
 
         # self._n_conv = n_conv
-        self._n_conv = 2
+        self._n_conv = 3
         # self._n_dense = n_dense
-        self._n_dense = 3
+        self._n_dense = 2
         try:
             iter(n_1Dfilters)
         except TypeError:
@@ -491,24 +489,20 @@ class LeafNetwork(object):
             raise
 
         try:
-            self.datadir = os.path.join(self.netdir, '../data/' + str(logtime))
-            os.makedirs(self.datadir)
-        except:
-            raise
+            self.datadir = os.path.join(self.netdir, '../data/')
+            os.mkdir(self.datadir)
+        except OSError:
+            pass
 
         cPickle.dump(new_data, open(os.path.join(self.datadir, "data_1D.pkl"), "wb"))
         cPickle.dump(data2D, open(os.path.join(self.datadir, "data_2D.pkl"), "wb"))
         cPickle.dump(targets, open(os.path.join(self.datadir, "targets.pkl"), "wb"))
-        # self._data1D = new_data
-        # self._data2D = data2D
-        # self._targets = targets
         X_train, X_train2D, y_train, X_val, X_val2D, y_val = self.split_data(data1D=new_data, data2D=data2D,
                                                                              targets=targets, train_prop=train_prop,
                                                                              shuffle=shuffle)
 
         if name is None:
             self.__name__ = str(logtime) + "__" + str(self._n_conv) + "CLayers_" + str(self._n_dense) + "DLayers"
-
         else:
             self.__name__ = name
         self.create_layers(n_1Dfilters=self._n_1Dfilters, n_2Dfilters=self._n_2Dfilters, n_conv=self._n_conv,
@@ -610,7 +604,7 @@ class LeafNetwork(object):
         if 1 in self.__nets__:
             self.DConvLayers = layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var)
             self.DConvLayers = layers.batch_norm(layers.Conv1DLayer(self.DConvLayers, num_filters=1, filter_size=3,
-                                                                    nonlinearity=self._nonlinearity))  # no nonL, 1 filt
+                                                                    nonlinearity=self._nonlinearity))
         if 2 in self.__nets__:
             self.DenseLayers = layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var)
         logging.debug('1D input layers created. Creating 2D input layers...')
@@ -1048,6 +1042,7 @@ class LeafNetwork(object):
         if plotting or save_plots:
             from textwrap import fill
         epochs = dict()
+        Total_time = time.time()
         if pretrain:
             if 0 in self.__nets__:
                 # Loss expression
@@ -1089,18 +1084,10 @@ class LeafNetwork(object):
                 if verbose and verbosity >= 3:
                     print('Creating training function for 1D autoencoder')
                 AE1DTrainer = theano.function([self.input_var, self.AE_target_var], AE1DLoss, updates=AE1DUpdates)
-
-                # Initialize storage variables
-                AE1DErr = []
-                AE1DValErr = []
-                AE1DTrain_time = []
-
-                AE1Dflag = False
                 flags.update({"AE1D": False})
             else:
                 # Will cause the pretraining loop to skip training the 1D autoencoder
                 flags.update({"AE1D": True})
-                AE1Dflag = True
 
             if 3 in self.__nets__:
                 # Loss expression
@@ -1143,17 +1130,9 @@ class LeafNetwork(object):
                     print('Creating training for 2D autoencoder')
                 AE2DTrainer = theano.function([self.input_var2D, self.AE_target_var2D], AE2DLoss, updates=AE2DUpdates)
 
-                # Initalize storage variables
-                AE2DErr = []
-                AE2DValErr = []
-                AE2DTrain_time = []
-
                 flags.update({"AE2D": False})
-                AE2Dflag = False
             else:
                 flags.update({"AE2D": True})
-                AE2Dflag = True
-
             AETrain_time = time.time()
             for i in range(num_epochs):
                 logging.debug("Pretraining Epoch %r" % i)
@@ -1161,84 +1140,60 @@ class LeafNetwork(object):
                     print "##" * 50
                     print "Pretraining Epoch %r" % i
                     print "--" * 50
-                # if not AE1Dflag:
-                if not flags("AE1D"):
+                if not flags["AE1D"]:
                     logging.debug("Training 1D autoencoder...")
                     if verbose and verbosity >= 2:
                         print "Training 1D autoencoder..."
                     t = time.time()
-                    # AE1DErr.append(AE1DTrainer(self.X_train, self.X_train))
-                    errors("AE1D").append(AE1DTrainer(X_train, X_train))
-                    # AE1DTrain_time.append(time.time() - t)
-                    times("AE1D").append(time.time() - t)
-                    # logging.debug('Time: %s' % (AE1DTrain_time[-1]))
-                    logging.debug('Time: %s' % (times("AE1D")[-1]))
-                    # logging.debug('Error: %s' % (AE1DErr[-1]))
-                    logging.debug('Error: %s' % (errors("AE1D")[-1]))
-                    # AE1DValErr.append(AE1DVal_fn(self.X_val, self.X_val))
-                    val_errors("AE1D").append(AE1DVal_fn(X_val, X_val))
-                    # if AE1DErr[-1] < stop_err:
-                    if errors("AE1D")[-1] < stop_err:
+                    errors["AE1D"].append(AE1DTrainer(X_train, X_train))
+                    times["AE1D"].append(time.time() - t)
+                    logging.debug('Time: %s' % (times["AE1D"][-1]))
+                    logging.debug('Error: %s' % (errors["AE1D"][-1]))
+                    val_errors["AE1D"].append(AE1DVal_fn(X_val, X_val))
+                    if errors["AE1D"][-1] < stop_err:
                         logging.debug("1D autoencoder training converged.")
                         if verbose and verbosity >= 1:
                             print "1-D training converged."
                         epochs.update({"AE1D": i + 1})
-                        AE1Dflag = True
                         flags.update({"AE1D": True})
-                    # elif self.stablecheck(AE1DErr):
-                    elif self.stablecheck(errors("AE1D")):
+                    elif self.stablecheck(errors["AE1D"]):
                         logging.debug("1D autoencoder error converged.")
                         if verbose and verbosity >= 1:
                             print "1-D error converged before training completed."
                         epochs.update({"AE1D": i + 1})
                         flags.update({"AE1D": True})
-                        AE1Dflag = True
-
-                # if not AE2Dflag:
-                if not flags("AE2D"):
+                if not flags["AE2D"]:
                     logging.debug('Training 2D autoencoder...')
                     if verbose and verbosity >= 2:
                         print "Training 2D autoencoder..."
                     t = time.time()
-                    # AE2DErr.append(AE2DTrainer(self.X_train2D, self.X_train2D))
-                    errors("AE2D").append(AE2DTrainer(X_train2D, X_train2D))
-                    # AE2DTrain_time.append(time.time() - t)
-                    times("AE2D").append(time.time() - t)
-                    # logging.debug('Time: %s' % (AE2DTrain_time[-1]))
-                    logging.debug('Time: %s' % (times("AE2D")[-1]))
-                    # logging.debug('Error: %s' % (AE2DErr[-1]))
-                    logging.debug('Error: %s' % (errors("AE2D")[-1]))
-                    # AE2DValErr.append(AE2DVal_fn(self.X_val2D, self.X_val2D))
-                    val_errors("AE2D").append(AE2DVal_fn(X_val2D, X_val2D))
-                    # if AE2DErr[-1] < stop_err:
-                    if errors("AE2D")[-1] < stop_err:
+                    errors["AE2D"].append(AE2DTrainer(X_train2D, X_train2D))
+                    times["AE2D"].append(time.time() - t)
+                    logging.debug('Time: %s' % (times["AE2D"][-1]))
+                    logging.debug('Error: %s' % (errors["AE2D"][-1]))
+                    val_errors["AE2D"].append(AE2DVal_fn(X_val2D, X_val2D))
+                    if errors["AE2D"][-1] < stop_err:
                         logging.debug('2D training converged.')
                         if verbose and verbosity >= 1:
                             print "2-D training converged."
                         epochs.update({"AE2D": i + 1})
                         flags.update({"AE2D": True})
-                        # AE2Dflag = True
-                    # elif self.stablecheck(AE2DErr):
-                    elif self.stablecheck(errors("AE2D")):
+                    elif self.stablecheck(errors["AE2D"]):
                         logging.debug('2D error converged')
                         if verbose and verbosity >= 1:
                             print "2-D error converged before training completed."
                         epochs.update({"AE2D": i + 1})
                         flags.update({"AE2D": True})
-                        # AE2Dflag = True
-                # if AE1Dflag and AE2Dflag:
-                if flags.values().all():
+                if all(flags.values()):
                     break
                 if verbose:
                     print
 
             AETrain_time = time.time() - AETrain_time
-            # if not AE1Dflag:
-            if not flags("AE1D"):
+            if not flags["AE1D"]:
                 flags.update({"AE1D": True})
                 epochs.update({"AE1D": i + 1})
-            # if not AE2Dflag:
-            if not flags("AE2D"):
+            if not flags["AE2D"]:
                 flags.update({"AE2D": True})
                 epochs.update({"AE2D": i + 1})
 
@@ -1250,20 +1205,14 @@ class LeafNetwork(object):
                 print "Pretraining Completed"
                 print "Total Time: {:.3f}s".format(AETrain_time)
                 print "--" * 50
-                # print "1-D Autoencoder Error: ", AE1DErr[-1]
-                print "1-D Autoencoder Error: ", errors("AE1D")[-1]
-                # print "1-D Autoencoder Validation Error: ", AE1DValErr[-1]
-                print "1-D Autoencoder Validation Error: ", val_errors("AE1D")[-1]
-                # print "Training Time: {:.3f}s".format(np.sum(AE1DTrain_time))
-                print "Training Time: {:.3f}s".format(np.sum(times("AE1D")))
+                print "1-D Autoencoder Error: ", errors["AE1D"][-1]
+                print "1-D Autoencoder Validation Error: ", val_errors["AE1D"][-1]
+                print "Training Time: {:.3f}s".format(np.sum(times["AE1D"]))
                 print "Training Epochs: ", epochs["AE1D"]
                 print "--" * 50
-                # print "2-D Autoencoder Error: ", AE2DErr[-1]
-                print "2-D Autoencoder Error: ", errors("AE2D")[-1]
-                # print "2-D Autoencoder Validation Error: ", AE2DValErr[-1]
-                print "2-D Autoencoder Validation Error: ", val_errors("AE2D")[-1]
-                # print "Training Time: {:.3f}s".format(np.sum(AE2DTrain_time))
-                print "Training Time: {:.3f}s".format(np.sum(times("AE2D")))
+                print "2-D Autoencoder Error: ", errors["AE2D"][-1]
+                print "2-D Autoencoder Validation Error: ", val_errors["AE2D"][-1]
+                print "Training Time: {:.3f}s".format(np.sum(times["AE2D"]))
                 print "Training Epochs: ", epochs["AE2D"]
                 print "##" * 50
                 print "##" * 50
@@ -1298,16 +1247,11 @@ class LeafNetwork(object):
             Conv1DTrainer = theano.function([self.input_var, self.target_var], Conv1DLoss, updates=Conv1DUpdates)
 
             # Initialize storage variables
-            Conv1DErr = []
-            Conv1DValErr = []
-            Conv1DTrain_time = []
             Conv1DVal_time = []
 
             flags.update({"Conv1D": False})
-            Conv1Dflag = False
         else:
             flags.update({"Conv1D": True})
-            Conv1Dflag = True
 
         if 2 in self.__nets__:
             # Loss expression
@@ -1336,16 +1280,11 @@ class LeafNetwork(object):
             logging.debug('Creating training function for fully connected network')
             DenseTrainer = theano.function([self.input_var, self.target_var], DenseLoss, updates=DenseUpdates)
             # Initialize storage variables
-            DenseErr = []
-            DenseValErr = []
-            DenseTrain_time = []
             DenseVal_time = []
 
             flags.update({"Dense": False})
-            Denseflag = False
         else:
             flags.update({"Dense": True})
-            Denseflag = True
 
         if 1 in self.__nets__:
             # Loss expression
@@ -1376,13 +1315,9 @@ class LeafNetwork(object):
             DConvTrainer = theano.function([self.input_var, self.target_var], DConvLoss, updates=DConvUpdates)
 
             # Initialize Storage Variables
-            DConvErr = []
-            DConvValErr = []
-            DConvTrain_time = []
             DConvVal_time = []
 
             flags.update({"DConv": False})
-            DConvflag = False
         else:
             flags.update({"DConv": True})
 
@@ -1411,16 +1346,11 @@ class LeafNetwork(object):
             Conv2DTrainer = theano.function([self.input_var2D, self.target_var], Conv2DLoss, updates=Conv2DUpdates)
 
             # Initialize Storage Variables
-            Conv2DErr = []
-            Conv2DValErr = []
-            Conv2DTrain_time = []
             Conv2DVal_time = []
 
             flags.update({"Conv2D": False})
-            Conv2Dflag = False
         else:
             flags.update({"Conv2D": True})
-            Conv2Dflag = True
         NetTrain_time = time.time()
         for i in range(num_epochs):
             logging.debug("Training epoch %r" % i)
@@ -1428,172 +1358,127 @@ class LeafNetwork(object):
                 print "##" * 50
                 print "Training Epoch %r" % i
                 print "--" * 50
-            # if not Conv1Dflag:
-            if not flags("Conv1D"):
+            if not flags["Conv1D"]:
                 logging.debug("Training pretrained 1-D convolutional net...")
                 if verbose and verbosity >= 2:
                     print "Training pretrained 1-D convolutional net..."
                 t = time.time()
-                # Conv1DErr.append(Conv1DTrainer(self.X_train, self.y_train))
-                errors("Conv1D").append(Conv1DTrainer(X_train, y_train))
-                # Conv1DTrain_time.append(time.time() - t)
-                times("Conv1D").append(time.time() - t)
-                # logging.debug("Time: %s" % Conv1DTrain_time[-1])
-                logging.debug("Time: %s" % times("Conv1D")[-1])
-                # logging.debug("Error: %s" % Conv1DErr[-1])
-                logging.debug("Error: %s" % errors("Conv1D")[-1])
+                errors["Conv1D"].append(Conv1DTrainer(X_train, y_train))
+                times["Conv1D"].append(time.time() - t)
+                logging.debug("Time: %s" % times["Conv1D"][-1])
+                logging.debug("Error: %s" % errors["Conv1D"][-1])
                 t = time.time()
-                # Conv1DValErr.append(Conv1DVal_fn(self.X_val, self.y_val))
-                val_errors("Conv1D").append(Conv1DVal_fn(X_val, y_val))
+                val_errors["Conv1D"].append(Conv1DVal_fn(X_val, y_val))
                 Conv1DVal_time.append(time.time() - t)
-                # if Conv1DErr[-1] < stop_err:
-                if errors("Conv1D")[-1] < stop_err:
+                if errors["Conv1D"][-1] < stop_err:
                     logging.debug('1D training converged')
                     if verbose and verbosity >= 1:
                         print "1-D training converged."
                     epochs.update({"Conv1D": i + 1})
-                    # Conv1Dflag = True
                     flags.update({"Conv1D": True})
-                # elif self.stablecheck(Conv1DErr):
-                elif self.stablecheck(errors("Conv1D")):
+                elif self.stablecheck(errors["Conv1D"]):
                     logging.debug('1D error converged')
                     if verbose and verbosity >= 1:
                         print "1-D error converged before training completed."
                     epochs.update({"Conv1D": i + 1})
                     flags.update({"Conv1D": True})
-                    Conv1Dflag = True
-            # if not Conv2Dflag:
-            if not flags("Conv2D"):
+            if not flags["Conv2D"]:
                 logging.debug("Training pretrained 2D convolutional net")
                 if verbose and verbosity >= 2:
                     print "Training pretrained 2-D convolutional net..."
                 t = time.time()
-                # Conv2DErr.append(Conv2DTrainer(self.X_train2D, self.y_train))
-                errors("Conv2D").append(Conv2DTrainer(X_train2D, y_train))
-                # Conv2DTrain_time.append(time.time() - t)
-                times("Conv2D").append(time.time() - t)
-                # logging.debug("Time: %s" % Conv2DTrain_time[-1])
-                logging.debug("Time: %s" % times("Conv2D")[-1])
-                # logging.debug("Error: %s" % Conv2DErr[-1])
-                logging.debug("Error: %s" % errors("Conv2D")[-1])
+                errors["Conv2D"].append(Conv2DTrainer(X_train2D, y_train))
+                times["Conv2D"].append(time.time() - t)
+                logging.debug("Time: %s" % times["Conv2D"][-1])
+                logging.debug("Error: %s" % errors["Conv2D"][-1])
                 t = time.time()
-                # Conv2DValErr.append(Conv2DVal_fn(self.X_val2D, self.y_val))
-                val_errors("Conv2D").append(Conv2DVal_fn(X_val2D, y_val))
+                val_errors["Conv2D"].append(Conv2DVal_fn(X_val2D, y_val))
                 Conv2DVal_time.append(time.time() - t)
-                # if Conv2DErr[-1] < stop_err:
-                if errors("Conv2D")[-1] < stop_err:
+                if errors["Conv2D"][-1] < stop_err:
                     logging.debug("2D training converged")
                     if verbose and verbosity >= 1:
                         print "2-D training converged."
                     epochs.update({"Conv2D": i + 1})
                     flags.update({"Conv2D": True})
-                    # Conv2Dflag = True
-                # elif self.stablecheck(Conv2DErr):
-                elif self.stablecheck(errors("Conv2D")):
+                elif self.stablecheck(errors["Conv2D"]):
                     logging.debug("2D error converged")
                     if verbose and verbosity >= 1:
                         print "2-D error converged before training completed."
                     epochs.update({"Conv2D": i + 1})
                     flags.update({"Conv2D": True})
-                    # Conv2Dflag = True
-            # if not DConvflag:
-            if not flags("DConv"):
+            if not flags["DConv"]:
                 logging.debug("Training unpretrained convolutional net")
                 if verbose and verbosity >= 2:
                     print "Training Unpretrained Convolutional Net..."
                 t = time.time()
-                # DConvErr.append(DConvTrainer(self.X_train, self.y_train))
-                errors("DConv").append(DConvTrainer(X_train, y_train))
-                # DConvTrain_time.append(time.time() - t)
-                times("DConv").append(time.time() - t)
-                # logging.debug("Time: %s" % DConvTrain_time[-1])
-                logging.debug("Time: %s" % times("DConv")[-1])
-                # logging.debug("Error: %s" % DConvErr[-1])
-                logging.debug("Error: %s" % errors("DConv")[-1])
+                errors["DConv"].append(DConvTrainer(X_train, y_train))
+                times["DConv"].append(time.time() - t)
+                logging.debug("Time: %s" % times["DConv"][-1])
+                logging.debug("Error: %s" % errors["DConv"][-1])
                 t = time.time()
-                # DConvValErr.append(DConvVal_fn(self.X_val, self.y_val))
-                val_errors("DConv").append(DConvVal_fn(X_val, y_val))
+                val_errors["DConv"].append(DConvVal_fn(X_val, y_val))
                 DConvVal_time.append(time.time() - t)
 
-                # if DConvErr[-1] < stop_err:
-                if errors("DConv")[-1] < stop_err:
+                if errors["DConv"][-1] < stop_err:
                     logging.debug("1D non-pretrained training converged.")
                     if verbose and verbosity >= 1:
                         print "1-D non-pretrained training converged."
                     epochs.update({"DConv": i + 1})
                     flags.update({"DConv": True})
-                    DConvflag = True
-                # elif self.stablecheck(DConvErr):
-                elif self.stablecheck(errors("DConv")):
+                elif self.stablecheck(errors["DConv"]):
                     logging.debug("1D non-pretrained error converged.")
                     if verbose and verbosity >= 1:
                         print "1-D non-pretrained error converged before training completed."
                     epochs.update({"DConv": i + 1})
                     flags.update({"DConv": True})
-                    DConvflag = True
-            # if not Denseflag:
-            if not flags("Dense"):
+            if not flags["Dense"]:
                 logging.debug("Training MLP")
                 if verbose and verbosity >= 2:
                     print "Training MLP..."
                 t = time.time()
-                # DenseErr.append(DenseTrainer(self.X_train, self.y_train))
-                errors("Dense").append(DenseTrainer(X_train, y_train))
-                # DenseTrain_time.append(time.time() - t)
-                times("Dense").append(time.time() - t)
-                # logging.debug("Time: %s" % DenseTrain_time[-1])
-                logging.debug("Time: %s" % times("Dense")[-1])
-                # logging.debug("Error: %s" % DenseErr[-1])
-                logging.debug("Error: %s" % errors("Dense")[-1])
+                errors["Dense"].append(DenseTrainer(X_train, y_train))
+                times["Dense"].append(time.time() - t)
+                logging.debug("Time: %s" % times["Dense"][-1])
+                logging.debug("Error: %s" % errors["Dense"][-1])
                 t = time.time()
-                # DenseValErr.append(DenseVal_fn(self.X_val, self.y_val))
-                val_errors("Dense").append(DenseVal_fn(X_val, y_val))
+                val_errors["Dense"].append(DenseVal_fn(X_val, y_val))
                 DenseVal_time.append(time.time() - t)
-                # if DenseErr[-1] < stop_err:
-                if errors("Dense")[-1] < stop_err:
+                if errors["Dense"][-1] < stop_err:
                     logging.debug("MLP training converged")
                     if verbose and verbosity >= 1:
                         print "MLP training converged."
                     epochs.update({"Dense": i + 1})
                     flags.update({"Dense": True})
-                    Denseflag = True
-                # elif self.stablecheck(DenseErr):
-                elif self.stablecheck(errors("Dense")):
+                elif self.stablecheck(errors["Dense"]):
                     logging.debug("MLP error converged.")
                     if verbose and verbosity >= 1:
                         print "Fully connected error converged before training completed."
                     epochs.update({"Dense": i + 1})
                     flags.update({"Dense": True})
-                    Denseflag = True
-            # if Conv1Dflag and Conv2Dflag and DConvflag and Denseflag:
-            if flags.values().all():
+            if all(flags.values()):
                 break
             if verbose:
                 print
-
+        Total_time = time.time() - Total_time
         NetTrain_time = time.time() - NetTrain_time
         if 0 in self.__nets__:
-            # if not Conv1Dflag:
-            if not flags("Conv1D"):
+            if not flags["Conv1D"]:
                 epochs.update({"Conv1D": i + 1})
                 flags.update({"Conv1D": True})
         if 3 in self.__nets__:
-            # if not Conv2Dflag:
-            if not flags("Conv2D"):
+            if not flags["Conv2D"]:
                 epochs.update({"Conv2D": i + 1})
                 flags.update({"Conv2D": True})
-        if 1 in self.__nets__:
-            # if not DConvflag:
-            if not flags("DConv"):
+        if 1 in self.__nets__::
+            if not flags["DConv"]:
                 epochs.update({"DConv": i + 1})
                 flags.update({"DConv": True})
         if 2 in self.__nets__:
-            # if not Denseflag:
-            if not flags("Dense"):
+            if not flags["Dense"]:
                 epochs.update({"Dense": i + 1})
                 flags.update({"Dense": True})
         self.epochs = epochs
-        logging.debug("All networks trained: %s" % (flags.values().all()))
+        logging.debug("All networks trained: %s" % (all(flags.values())))
         logging.debug("Training complete")
         logging.debug("Total time: %s" % NetTrain_time)
         logging.debug("Epochs: %s" % i)
@@ -1607,39 +1492,27 @@ class LeafNetwork(object):
             print "Frozen Weights: %r" % (self._frozen)
             print "--" * 50
             if 0 in self.__nets__:
-                # print "1-D Training Error: ", Conv1DErr[-1]
-                print "1-D Training Error: ", errors("Conv1D")[-1]
-                # print "1-D Mean Validation Error: ", np.mean(Conv1DErr[-10:])
-                print "1-D Mean Validation Error: ", np.mean(errors("Conv1D")[-n_stable:])
-                # print "Training Time: {:.3f}s".format(np.sum(Conv1DTrain_time))
-                print "Training Time: {:.3f}s".format(np.sum(times("Conv1D")))
+                print "1-D Training Error: ", errors["Conv1D"][-1]
+                print "1-D Mean Validation Error: ", np.mean(errors["Conv1D"][-n_stable:])
+                print "Training Time: {:.3f}s".format(np.sum(times["Conv1D"]))
                 print "Training Epochs: ", epochs["Conv1D"]
                 print "--" * 50
             if 3 in self.__nets__:
-                # print "2-D Training Error: ", Conv2DErr[-1]
-                print "2-D Training Error: ", errors("Conv2D")[-1]
-                # print "2-D Mean Validation Error: ", np.mean(Conv2DErr[-10:])
-                print "2-D Mean Validation Error: ", np.mean(errors("Conv2D")[-n_stable:])
-                # print "Training Time: {:.3f}s".format(np.sum(Conv1DTrain_time))
-                print "Training Time: {:.3f}s".format(np.sum(times("Conv2D")))
+                print "2-D Training Error: ", errors["Conv2D"][-1]
+                print "2-D Mean Validation Error: ", np.mean(errors["Conv2D"][-n_stable:])
+                print "Training Time: {:.3f}s".format(np.sum(times["Conv2D"]))
                 print "Training Epochs: ", epochs["Conv2D"]
                 print "--" * 50
             if 1 in self.__nets__:
-                # print "1-D Unpretrained Error: ", DConvErr[-1]
-                print "1-D Unpretrained Error: ", errors("DConv")[-1]
-                # print "1-D Unpretrained Validation Error: ", np.mean(DConvErr[-10:])
-                print "1-D Unpretrained Validation Error: ", np.mean(errors("DConv")[-n_stable:])
-                # print "Training Time: {:.3f}s".format(np.sum(DConvTrain_time))
-                print "Training Time: {:.3f}s".format(np.sum(times("DConv")))
+                print "1-D Unpretrained Error: ", errors["DConv"][-1]
+                print "1-D Unpretrained Validation Error: ", np.mean(errors["DConv"][-n_stable:])
+                print "Training Time: {:.3f}s".format(np.sum(times["DConv"]))
                 print "Training Epochs: ", epochs["DConv"]
                 print "--" * 50
             if 2 in self.__nets__:
-                # print "MLP Training Error: ", DenseErr[-1]
-                print "MLP Training Error: ", errors("Dense")[-1]
-                # print "MLP Mean Validation Error: ", np.mean(DenseErr[-10:])
-                print "MLP Mean Validation Error: ", np.mean(errors("Dense")[-n_stable:])
-                # print "Training Time: {:.3f}s".format(np.sum(DenseTrain_time))
-                print "Training Time: {:.3f}s".format(np.sum(times("Dense")))
+                print "MLP Training Error: ", errors["Dense"][-1]
+                print "MLP Mean Validation Error: ", np.mean(errors["Dense"][-n_stable:])
+                print "Training Time: {:.3f}s".format(np.sum(times["Dense"]))
                 print "Training Epochs: ", epochs["Dense"]
             print "##" * 50
             print "##" * 50
@@ -1652,7 +1525,7 @@ class LeafNetwork(object):
                 row = [i]
                 for key in errors.keys():
                     try:
-                        row.append(errors(key)[i])
+                        row.append(errors[key][i])
                     except IndexError:
                         pass
                 error_writer.writerow(row)
@@ -1663,7 +1536,7 @@ class LeafNetwork(object):
                 row = [i]
                 for key in times.keys():
                     try:
-                        row.append(times(key)[i])
+                        row.append(times[key][i])
                     except IndexError:
                         pass
                 time_writer.writerow(row)
@@ -1673,24 +1546,24 @@ class LeafNetwork(object):
             stat_writer = csv.writer(statfile)
             stat_writer.writerow(statheader)
             for key in errors.keys():
-                error = errors(key)
-                time = times(key)
-                row = [key, np.mean(error), np.median(error), np.var(error), np.max(error), np.min(error),
-                       np.mean(time), np.median(time), np.var(time), np.max(time), np.min(time), np.sum(time),
-                       epochs(key)]
+                _error = errors[key]
+                _time = times[key]
+                row = [key, np.mean(_error), np.median(_error), np.var(_error), np.max(_error), np.min(_error),
+                       np.mean(_time), np.median(_time), np.var(_time), np.max(_time), np.min(_time), np.sum(_time),
+                       epochs[key]]
                 stat_writer.writerow(row)
+            if pretrain:
+                stat_writer.writerow(['Autoencoder Training Time', AETrain_time])
+            stat_writer.writerow(['Network Training Time', NetTrain_time])
+            stat_writer.writerow(['Total Time', Total_time])
 
         if plotting or save_plots:
             if 0 in self.__nets__ and 2 in self.__nets__:
                 plt.title(fill("MLP and 1-D Unpretrained Convolutional Network Training and Validation Error", 45))
-                # plt.plot(DConvErr, 'g', label='Convolutional, Training')
-                plt.plot(errors("DConv"), 'g', label='Convolutional, Training')
-                # plt.plot(DConvValErr, 'b', label='Convolutional, Validation')
-                plt.plot(val_errors("DConv"), 'b', label='Convolutional, Validation')
-                # plt.plot(DenseErr, 'k', label='MLP, Training')
-                plt.plot(errors("Dense"), 'k', label='MLP, Training')
-                # plt.plot(DenseValErr, 'r', label='MLP, Validation')
-                plt.plot(val_errors("Dense"), 'r', label='MLP, Validation')
+                plt.plot(errors["DConv"], 'g', label='Convolutional, Training')
+                plt.plot(val_errors["DConv"], 'b', label='Convolutional, Validation')
+                plt.plot(errors["Dense"], 'k', label='MLP, Training')
+                plt.plot(val_errors["Dense"], 'r', label='MLP, Validation')
                 plt.xlabel("Epoch")
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
@@ -1705,10 +1578,8 @@ class LeafNetwork(object):
                 plt.title(
                     fill("1-D Convolutional Network Training and Validation Error: %r filters" % (self._n_1Dfilters[0]),
                          45))
-                # plt.plot(Conv1DErr, 'g', label='Training')
-                plt.plot(errors("Conv1D"), 'g', label='Training')
-                # plt.plot(Conv1DValErr, 'b', label='Validation')
-                plt.plot(val_errors("Conv1D"), 'b', label='Validation')
+                plt.plot(errors["Conv1D"], 'g', label='Training')
+                plt.plot(val_errors["Conv1D"], 'b', label='Validation')
                 plt.xlabel("Epoch")
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
@@ -1722,10 +1593,8 @@ class LeafNetwork(object):
                 plt.title(
                     fill("2-D Convolutional Network Training and Validation Error: %r filters" % (self._n_2Dfilters[0]),
                          45))
-                # plt.plot(Conv2DErr, 'g', label='Training')
-                plt.plot(errors("Conv2D"), 'g', label='Training')
-                # plt.plot(Conv2DValErr, 'b', label='Validation')
-                plt.plot(val_errors("Conv2D"), 'b', label='Validation')
+                plt.plot(errors["Conv2D"], 'g', label='Training')
+                plt.plot(val_errors["Conv2D"], 'b', label='Validation')
                 plt.xlabel("Epoch")
                 plt.ylabel("Mean Squared Error")
                 plt.legend()
@@ -2752,18 +2621,18 @@ def test(pickled):
         print "Data generated"
         print
         print "Pickling data..."
-        cPickle.dump(data, open("leafdump.p", "wb"))
-        cPickle.dump(inputs, open("inputdump.p", "wb"))
-        cPickle.dump(inputs2D, open("input2Ddump.p", "wb"))
-        cPickle.dump(targets, open("targetdump.p", "wb"))
+        cPickle.dump(data, open("leafdump.pkl", "wb"))
+        cPickle.dump(inputs, open("inputdump.pkl", "wb"))
+        cPickle.dump(inputs2D, open("input2Ddump.pkl", "wb"))
+        cPickle.dump(targets, open("targetdump.pkl", "wb"))
         print 'Done'
         print
     else:
         print "Loading pickled data..."
-        data = cPickle.load(open("leafdump.p", "rb"))
-        inputs = cPickle.load(open("inputdump.p", "rb"))
-        inputs2D = cPickle.load(open("input2Ddump.p", "rb"))
-        targets = cPickle.load(open("targetdump.p", "rb"))
+        data = cPickle.load(open("leafdump.pkl", "rb"))
+        inputs = cPickle.load(open("inputdump.pkl", "rb"))
+        inputs2D = cPickle.load(open("input2Ddump.pkl", "rb"))
+        targets = cPickle.load(open("targetdump.pkl", "rb"))
         print "Done"
         print
 
@@ -2773,7 +2642,7 @@ def test(pickled):
     pickled = False
     if pickled:
         print "Loading pickled network..."
-        LeafNet = cPickle.load(open("netdump.p", "rb"))
+        LeafNet = cPickle.load(open("netdump.pkl", "rb"))
         print "Net loaded"
         print
     else:
@@ -2782,7 +2651,7 @@ def test(pickled):
         print 'Network constructed'
         print
         print "Pickling network..."
-        cPickle.dump(LeafNet, open("netdump.p", "wb"))
+        cPickle.dump(LeafNet, open("netdump.pkl", "wb"))
         print "Done"
         pickled = True
 
@@ -2792,9 +2661,9 @@ if __name__ == '__main__':
     # pickled = False
     # if pickled:
     #     print "Loading pickled objects..."
-    #     data = cPickle.load(open("leafdump.p", "rb"))
-    #     inputs = cPickle.load(open("inputdump.p", "rb"))
-    #     targets = cPickle.load(open("targetdump.p", "rb"))
-    # LeafNet = cPickle.load(open("netdump.p", "rb"))
+    #     data = cPickle.load(open("leafdump.pkl", "rb"))
+    #     inputs = cPickle.load(open("inputdump.pkl", "rb"))
+    #     targets = cPickle.load(open("targetdump.pkl", "rb"))
+    # LeafNet = cPickle.load(open("netdump.pkl", "rb"))
     # print "Done"
     pickled = test(pickled)
