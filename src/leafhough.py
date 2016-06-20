@@ -18,6 +18,500 @@ from scipy.ndimage.filters import sobel, gaussian_filter, gaussian_filter1d
 from leafarea import *
 from image_processing import *
 
+
+class TrainingData:
+    def __init__(self, leaves, contours, scales, sigma=1., img_from_contour=False, names=None):
+        print 'Training Data'
+        self.sigma = sigma
+        if names is None:
+            names = self.namegen(names)
+        self.leaves = [Leaf(leaves[_],
+                            contour=contours[_],
+                            scale=scales[_],
+                            sigma=self.sigma,
+                            img_from_contour=img_from_contour,
+                            name=names[_],
+                            rescale=True) for _ in range(len(leaves))]
+        self.contours = [leaf.contour for leaf in self.leaves]
+        self.trainingdata = list()
+        self.trainingdata2D = list()
+        self.trainingtargets = list()
+        self.trainingweights = list()
+        self.update()
+        print "Initial Leaves Added"
+        self.eaten_leaves = list()
+
+    def namegen(self):
+        i = 0
+        print 'namegen'
+        while True:
+            yield "training leaf %r " % i
+            i += 1
+            if i == len(leaves):
+                break
+
+    @property
+    def __len__(self):
+        self.len = len(self.leaves)
+        return self.len
+
+    def update(self, sigma=None, visualize=False):
+        """Bookkeeping method to make sure all data is consistent"""
+        if sigma is not None:
+            self.sigma = sigma
+        self.smoothcontour(self.sigma)
+        self.orient(visualize=visualize)
+        self.findcentroid()
+        self.getangles(sigma=self.sigma)
+        self.curvature(self.sigma)
+
+    def curvature(self, sigma=None, indeces=None):
+        '''Computes the curvature at each point along the edge for each leaf specified by indeces'''
+        if sigma is not None:
+            self.sigma = sigma
+        curves = list()
+        if indeces is None:
+            for leaf in self.leaves:
+                leaf.curvature(sigma=self.sigma)
+                curves.append(leaf.curvatures)
+        else:
+            indeces = list(indeces)
+            for index in indeces:
+                self.leaves[index].curvature(sigma=self.sigma)
+                curves.append(leaves[index].curvatures)
+        return curves
+
+    def smoothcontour(self, sigma=1., indeces=None):
+        """Smooth all the contours by convolving a Gaussian kernel with a width given by sigma. If indeces is specified
+        then only those leaves' contours are updated"""
+        self.sigma = sigma
+        smoothedc = list()
+
+        if indeces is None:
+            for leaf in self.leaves:
+                leaf.smooth(self.sigma)
+                smoothedc.append(leaf.smooth_contour)
+        else:
+            indeces = list(indeces)
+            for index in indeces:
+                self.leaves[index].smooth(self.sigma)
+                smoothedc.append(self.leaves[index].smooth_contour)
+        return smoothedc
+
+    def findcentroid(self, indeces=None):
+        """Find the centroids of each of the leaves. If indeces is specified then only find those centroids"""
+        centroids = list()
+        if indeces is None:
+            for leaf in self.leaves:
+                leaf.findcentroid()
+                centroids.append(leaf.centroid)
+        else:
+            indeces = list(indeces)
+            for index in indeces:
+                self.leaves[index].findcentroid()
+                centroids.append(self.leaves[index].centroid)
+        return centroids
+
+    def getangles(self, indeces=None, **kwargs):
+        """Calculates the angle from the centroid to each edge pixel. Returns the list of angles to pixel locations for
+        the leaf at index. If no index is specified, returns a list containing the lists of angles for each leaf"""
+        smoothedc = list()
+        if indeces is None:
+            for leaf in self.leaves:
+                leaf.getangles(**kwargs)
+                smoothedc.append(leaf.getangles())
+        else:
+            indeces = list(indeces)
+            for index in indeces:
+                self.leaves[index].getangles(**kwargs)
+                smoothedc.append(self.leaves[index].getangles())
+        return smoothedc
+
+    def orient(self, indeces=None, **kwargs):
+        """Vertically orient the leaves given by indeces. If indeces is not specified then all leaves are oriented"""
+        if indeces is None:
+            for leaf in self.leaves:
+                leaf.orient(**kwargs)
+        else:
+            indeces = list(indeces)
+            for index in indeces:
+                self.leaves[index].orient(**kwargs)
+
+    def generatedata(self, ninputs=100, base_size=20, verbose=False, **kwargs):
+        """Generate data to be used by the neural networks.
+                base_size: number of basic types of eaten leaves to be further scaled and rotated."""
+        self.trainingdata = []
+        self.trainingdata2D = []
+        self.trainingtargets = []
+        self.trainingweights = []
+        angles = np.linspace(0., 2. * np.pi * (1. - 1. / float(ninputs)), ninputs)
+        for leaf in self.leaves:
+            leaf.generatewalks(20)
+            data, targets, weights = self.randomdata(leaf, **kwargs)
+            if verbose:
+                print "Data length:"
+                print len(data)
+            for d in data:
+                cdata = list()
+                d.curvature(self.sigma)
+                if verbose:
+                    print "Image Shape: ", d.color_image.shape
+                for a in angles:
+                    try:
+                        c = d.curvatures[d.extractpoint(a)]
+                        if np.isnan(c):
+                            if verbose:
+                                print "C IS STILL A NAN"
+                                print
+                            c = 1E9
+                        cdata.append(c)
+                    except ValueError:
+                        print "Curvature Data ValueError"
+                        print "Warning: Curvature not defined for angle %r in leaf %r" % (180. * a / np.pi, d.__name__)
+                        print "Substituting with %r instead" % leaf.__name__
+                        cdata.append(0)
+                        index = data.index(d)
+                        targets[index] = (1, 0)
+                        weights[index] = 1
+                        cdata = [leaf.curvatures[leaf.extractpoint(a)] for a in angles]
+                        break
+                self.trainingdata.append(cdata)
+                # Transpose the and reshape data to be accepted by lasagne according to (channels, height, width)
+                dimage = d.color_image.transpose(2, 0, 1)
+                dimage = dimage.reshape(1, dimage.shape[0], dimage.shape[1], dimage.shape[2])
+                if verbose:
+                    print "New Shape: ", dimage.shape
+                    print
+                self.trainingdata2D.append(dimage)
+            self.trainingtargets.extend(targets)
+            self.trainingweights.extend(weights)
+        self.trainingdata2D = np.concatenate(self.trainingdata2D, axis=0)
+        if verbose:
+            print self.trainingdata2D.shape
+        return self.trainingdata, self.trainingdata2D, self.trainingtargets, self.trainingweights
+
+    def randomdata(self, leaf, data_size=100, square_length=64, verbose=False, **kwargs):
+        """Creates a list of randomly scaled and rotated partially eaten leaves"""
+
+        if verbose:
+            print 'Random Data'
+        data = list()
+        targets = list()
+        weights = list()
+        leaf_list = list()
+        weight = list()
+        base_size = kwargs.get('base_size', 20)
+        for i in range(base_size):
+            d, w = leaf.randomwalk(**kwargs)
+            leaf_list.append(d)
+            weight.append(w)
+        size = 0
+        while size < data_size:
+            scale = 1.5 * np.random.rand() + 0.5
+            angle = 2. * np.pi * np.random.rand() - np.pi
+            index = np.random.randint(0, len(leaf_list))
+            leaf = leaf_list[index]
+
+            if not leaf.image.any():
+                if verbose:
+                    print "None, ever"
+                plt.imshow(leaf.image)
+                plt.show()
+                plt.imshow(leaf.image.astype(bool))
+                plt.show()
+                continue
+            new_leaf = tf.rotate(leaf.image, angle * 180. / np.pi, resize=True)
+            if not new_leaf.any():
+                if verbose:
+                    print "None after TF"
+                plt.imshow(new_leaf)
+                plt.show()
+                continue
+            new_leaf = imresize(new_leaf, scale, interp='bicubic')
+            if not new_leaf.any():
+                if verbose:
+                    print "None after RZ"
+                plt.imshow(new_leaf)
+                plt.show()
+                continue
+
+            leaf_c = tf.rotate(leaf.cimage, angle * 180. / np.pi, resize=True)
+            leaf_c = imresize(leaf_c, scale, interp='bicubic')
+            try:
+                ubounds = np.amax(parametrize(leaf_c), 0)
+                lbounds = np.amin(parametrize(leaf_c), 0)
+            except TypeError:
+                print "Leaf Images"
+                print "Leaf_C"
+                plt.imshow(leaf_c)
+                plt.show()
+                print "NewLeaf"
+                plt.imshow(new_leaf)
+                plt.show()
+                print
+                continue
+
+            leaf_c = parametrize(leaf_c)
+            if not new_leaf.any():
+                print leaf.__name__
+                print np.amax(leaf_c, 0)
+                print angle * 180. / np.pi
+                print scale
+                img = np.zeros(np.amax(leaf_c, 0) + 1, bool)
+                for c in leaf_c:
+                    img[c] = True
+                plt.imshow(img)
+                plt.show()
+                plt.imshow(new_leaf)
+                plt.show()
+                print
+                continue
+
+            # Crop the images to 64x64
+            shape = new_leaf.shape
+            padded = np.zeros((square_length, square_length, 3), dtype=np.uint8)
+            try:
+                for i in range(3):
+                    if shape[0] <= square_length and shape[1] <= square_length:
+                        padded[1:shape[0], 1:shape[1], i] = new_leaf[:-1, :-1]
+                    elif shape[1] < square_length + 1:
+                        padded[1:, 1:shape[1], i] = new_leaf[:square_length - 1, :]
+                    elif shape[0] < square_length + 1:
+                        padded[1:shape[0], 1:, i] = new_leaf[:, :square_length - 1]
+                    else:
+                        padded[1:, 1:, i] = new_leaf[:square_length - 1, :square_length - 1]
+            except TypeError:
+                print "Image shape: ", shape
+                raise
+            new_leaf = padded
+            try:
+                new_leaf = Leaf(new_leaf, contour=leaf_c, scale=scale, sigma=leaf.sigma, orient=False, rescale=False,
+                                name='eaten leaf %s of %s' % (size, leaf.__name__))
+            except TypeError:
+                print "TypeError"
+                print leaf.__name__
+                try:
+                    print "New Leaf.image"
+                    print new_leaf
+                    print type(new_leaf)
+                    plt.imshow(new_leaf.image)
+                    plt.show()
+                    raise
+                except AttributeError:
+                    print "New Leaf Displayed"
+                    plt.imshow(new_leaf)
+                    plt.show()
+                    raise
+                continue
+            data.append(new_leaf)
+            targets.append((scale, angle))
+            weights.append(weight[index])
+            size += 1
+        return data, targets, weights
+
+
+class Leaf(Contour):
+    def __init__(self, image, contour=None, img_from_contour=False, orient=True, rescale=False, sigma=1., **kwargs):
+        smoothed = kwargs.get('smoothed', False)
+        self.__name__ = kwargs.get('name', 'Leaf')
+        if contour is None:
+            if type(image) is list:
+                super(Leaf, self).__init__(image, sigma=sigma, rescale=rescale, name=self.__name__)
+            else:
+                if len(image.shape) == 3:
+                    if np.issubdtype(np.max(image), int):
+                        print "NumPy subdtype int"
+                        print np.issubdtype(np.max(image, int))
+                        self.color_image = image / 256.
+                    elif np.issubdtype(np.max(image), float):
+                        print "NumPy subdtype float"
+                        print np.issubdtype(np.max(image, float))
+                        self.color_image = image
+                    image = rgb_to_grey(image)
+                else:
+                    self.color_image = np.zeros((image.shape[0], image.shape[1], 3), dtype=np.float32)
+                    self.color_image[:, :, 0] = image / 256.
+                    self.color_image[:, :, 1] = image / 256.
+                    self.color_image[:, :, 2] = image / 256.
+                img = image.astype(bool)
+                plt.imshow(img.astype(bool))
+                plt.show()
+                super(Leaf, self).__init__(parametrize(img), sigma=sigma, rescale=rescale, name=self.__name__)
+                self.image = image
+        else:
+            if len(image.shape) == 3:
+                self.color_image = image / 256.
+                image = rgb_to_grey(image)
+            else:
+                self.color_image = np.zeros((image.shape[0], image.shape[1], 3), dtype=np.float32)
+                self.color_image[:, :, 0] = image / 256.
+                self.color_image[:, :, 1] = image / 256.
+                self.color_image[:, :, 2] = image / 256.
+            self.image = image
+            super(Leaf, self).__init__(contour, sigma=sigma, rescale=rescale, name=self.__name__)
+
+        if img_from_contour:
+            # Create images from the given contour
+            self.image = self.contourtoimg(contour, shape=kwargs.get('shape', (64, 64)), rescale=rescale)
+            self.color_image = np.zeros((self.image.shape[0], self.image.shape[1], 3), dtype=np.float32)
+            self.color_image[:, :, 0] = self.image
+            self.color_image[:, :, 1] = self.image
+            self.color_image[:, :, 2] = self.image
+
+        self.smooth(sigma=sigma)
+        self.curvature(**kwargs)
+        self.getangles(smoothed=smoothed, sigma=sigma)
+
+        if orient:
+            self.orient(smoothed=True, sigma=sigma, **kwargs)
+        self.data = list()
+        self.curvature(**kwargs)
+        self.getangles(smoothed=smoothed, sigma=sigma)
+
+    def __iter__(self):
+        return iter(self.contour)
+
+    @property
+    def __len__(self):
+        return len(self.contour)
+
+    @property
+    def image(self):
+        return self._image
+
+    @image.setter
+    def image(self, img):
+        self._image = img
+
+    def distance(self, p0, p1):
+        '''Euclidean distance between pixel 0 and pixel 1'''
+        return np.sqrt(float(p0[0] - p1[0]) ** 2. + float(p0[1] - p1[1]) ** 2.)
+
+    def pixelwalk(self, sigma, walk_length=256):
+        pixel = np.array((0, 0))
+        plist = [pixel]
+        bias = random.randint(-1, 1)
+        while pixel[1] < walk_length:
+            nx = -4. * np.arctan2(pixel[0], walk_length - pixel[1]) / (np.pi) + 4.5
+            nx = np.log(nx / (8. - nx))
+            nx = random.gauss(nx, sigma * random.betavariate(2, 5))
+            nx = np.array(convert(bias + 8. / (1. + np.exp(-nx))))
+            plist.append(plist[-1] + nx)
+            pixel += nx
+        plist.pop(0)
+        return plist
+
+    def generatewalks(self, num_walks=10):
+        '''Randomly generates walks up to num_walks'''
+        self.walks = [self.pixelwalk(4. * np.random.rand(), 128) for _ in range(num_walks)]
+
+    def randomwalk(self, default_freq=0.1, verbose=False, min_length=10):
+        """Start a random walk at a random point along the edge of the leaf until it intersects with the leaf again.
+                default_freq: Frequency at which completely uneaten leaves should appear
+                verbose: print debug statements
+                min_length: minimum contour length required to be considered valid"""
+        size = np.ceil(1. / default_freq)
+        i = 0
+        if np.random.randint(0, size) == 0:
+            if verbose:
+                print "Returning self"
+            return self, 1.
+        while True:
+            i += 1
+            length = len(self.contour)
+            t = np.random.randint(0, length / 2)
+            p0 = np.asarray(self.contour[-t]).astype(int)
+            windex = np.random.randint(0, len(self.walks))
+            walk = self.walks[windex]
+            L = [p0 + _ for _ in walk]
+            L.insert(0, p0)
+            L = [tuple(_) for _ in L]
+            f = lambda x: (x in self.contour) and (x != list(p0))
+            g = lambda x: (x[0] < 0) or (x[1] < 0)
+
+            out_of_bounds = map(g, L)
+            if any(out_of_bounds):
+                if verbose: print "Out of bounds"
+                continue
+            try:
+                filtered = filter(f, L)
+                index = self.contour.index(filtered[-1])
+            except IndexError:
+                if verbose: print "Walk does not intersect leaf"
+                continue
+
+            if index > length - t:
+                # Short Walk
+                windex = L.index(filtered[-1])
+                new = self.contour[:-t]
+                img = np.copy(self.image)
+                for p in L[:windex]:
+                    img[:p[0], p[1]] = 0.
+                l = L[:windex]
+                img[:l[-1][0], :l[-1][1]] = 0.
+                img[:l[0][0], :l[0][1]] = 0.
+                new.extend(L[:windex])
+                new.extend(self.contour[index:])
+
+            else:
+                # Long Walk
+                new = self.contour[:index]
+                L.reverse()
+                windex = L.index(filtered[-1])
+                img = np.copy(self.image)
+                for p in L[windex:]:
+                    img[p[0]:, p[1]] = 0.
+                l = L[windex:]
+                img[l[-1][0]:, :l[-1][1]] = 0.
+                img[l[0][0]:, l[0][1]:] = 0.
+                new.extend(L[windex:])
+                new.extend(self.contour[-t:])
+            if len(new) < min_length:
+                continue
+            break
+        weight = float(len(new)) / float(length)
+        return Leaf(img, contour=new, scale=self.scale, img_from_contour=True, sigma=self.sigma, orient=False,
+                    name=self.__name__, rescale=False), weight
+
+    def randomdata(self, base_size=20, data_size=100, **kwargs):
+        """Creates a list of randomly scaled and rotated partially eaten leaves.
+                base_size: number of unique random walks to perform
+                data_size: number of inputs to the network"""
+        data = list()
+        target = list()
+        weights = list()
+        leaves = list()
+        weight = list()
+        for i in range(base_size):
+            leaf, w = self.randomwalk(verbose=True)
+            leaves.append(leaf)
+            weight.append(w)
+
+        size = 0
+        while size < data_size:
+            scale = 1.5 * np.random.rand() + 0.5
+            random.jumpahead(size)
+            angle = 2. * np.pi * np.random.rand() - np.pi
+            index = np.random.randint(0, len(leaves))
+            leaf = leaves[index]
+            w = weight[index]
+            new_leaf = tf.rotate(leaf.image, angle * 180. / np.pi, resize=True, interp='bicubic')
+            new_leaf = imresize(new_leaf, scale, interp='bicubic')
+            new_leaf = new_leaf[:64, :64]
+            leaf_c = tf.rotate(leaf.cimage, angle * 180. / np.pi, resize=True, interp='bicubic')
+            leaf_c = imresize(leaf_c, scale, interp='bicubic')
+
+            new_leaf = Leaf(new_leaf, contour=parametrize(leaf_c), scale=scale, sigma=self.sigma, orient=False,
+                            name='eaten leaf %r of %r' % (size, self.__name__), rescale=False)
+
+            data.append(new_leaf)
+            target.append((scale, angle))
+            weights.append(w)
+            size += 1
+        return data, target, weights
+
+
+
 def squaredim(image, shape=(100, 100)):
     """
     Squares an image to the specified shape
@@ -256,7 +750,6 @@ def accumulate_gradients(r_table, grey_image, scales=np.linspace(0.5, 1.5, 20), 
         pixels_scanned += 1
         if verbose:
             if pixels_scanned == query_edges.shape[0]*query_edges.shape[1]:
-            # if pixels_scanned == np.dot(accumulator.shape):
                 print "Image Scanned"
                 break
             elif pixels_scanned % 10e2 == 0:

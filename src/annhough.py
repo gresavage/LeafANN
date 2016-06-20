@@ -41,297 +41,6 @@ from leafarea import *
 from image_processing import *
 
 
-class TrainingData:
-    def __init__(self, leaves, contours, scales, sigma=1., img_from_contour=False, names=None):
-        print 'Training Data'
-        self.sigma = sigma
-        if names is None:
-            names = self.namegen(names)
-        self.leaves = [Leaf(leaves[_],
-                            contour=contours[_],
-                            scale=scales[_],
-                            sigma=self.sigma,
-                            img_from_contour=img_from_contour,
-                            name=names[_],
-                            rescale=True) for _ in range(len(leaves))]
-        self.contours = [leaf.contour for leaf in self.leaves]
-        self.trainingdata = list()
-        self.trainingdata2D = list()
-        self.trainingtargets = list()
-        self.trainingweights = list()
-        self.update()
-        print "Initial Leaves Added"
-        self.eaten_leaves = list()
-
-    def namegen(self):
-        i = 0
-        print 'namegen'
-        while True:
-            yield "training leaf %r " % i
-            i += 1
-            if i == len(leaves):
-                break
-
-    @property
-    def __len__(self):
-        self.len = len(self.leaves)
-        return self.len
-
-    def update(self, sigma=None, visualize=False):
-        """Bookkeeping method to make sure all data is consistent"""
-        if sigma is not None:
-            self.sigma = sigma
-        self.smoothcontour(self.sigma)
-        self.orient(visualize=visualize)
-        self.findcentroid()
-        self.getangles(sigma=self.sigma)
-        self.curvature(self.sigma)
-
-    def curvature(self, sigma=None, indeces=None):
-        '''Computes the curvature at each point along the edge for each leaf specified by indeces'''
-        if sigma is not None:
-            self.sigma = sigma
-        curves = list()
-        if indeces is None:
-            for leaf in self.leaves:
-                leaf.curvature(sigma=self.sigma)
-                curves.append(leaf.curvatures)
-        else:
-            indeces = list(indeces)
-            for index in indeces:
-                self.leaves[index].curvature(sigma=self.sigma)
-                curves.append(leaves[index].curvatures)
-        return curves
-
-    def smoothcontour(self, sigma=1., indeces=None):
-        """Smooth all the contours by convolving a Gaussian kernel with a width given by sigma. If indeces is specified
-        then only those leaves' contours are updated"""
-        self.sigma = sigma
-        smoothedc = list()
-
-        if indeces is None:
-            for leaf in self.leaves:
-                leaf.smooth(self.sigma)
-                smoothedc.append(leaf.smooth_contour)
-        else:
-            indeces = list(indeces)
-            for index in indeces:
-                self.leaves[index].smooth(self.sigma)
-                smoothedc.append(self.leaves[index].smooth_contour)
-        return smoothedc
-
-    def findcentroid(self, indeces=None):
-        """Find the centroids of each of the leaves. If indeces is specified then only find those centroids"""
-        centroids = list()
-        if indeces is None:
-            for leaf in self.leaves:
-                leaf.findcentroid()
-                centroids.append(leaf.centroid)
-        else:
-            indeces = list(indeces)
-            for index in indeces:
-                self.leaves[index].findcentroid()
-                centroids.append(self.leaves[index].centroid)
-        return centroids
-
-    def getangles(self, indeces=None, **kwargs):
-        """Calculates the angle from the centroid to each edge pixel. Returns the list of angles to pixel locations for
-        the leaf at index. If no index is specified, returns a list containing the lists of angles for each leaf"""
-        smoothedc = list()
-        if indeces is None:
-            for leaf in self.leaves:
-                leaf.getangles(**kwargs)
-                smoothedc.append(leaf.getangles())
-        else:
-            indeces = list(indeces)
-            for index in indeces:
-                self.leaves[index].getangles(**kwargs)
-                smoothedc.append(self.leaves[index].getangles())
-        return smoothedc
-
-    def orient(self, indeces=None, **kwargs):
-        """Vertically orient the leaves given by indeces. If indeces is not specified then all leaves are oriented"""
-        if indeces is None:
-            for leaf in self.leaves:
-                leaf.orient(**kwargs)
-        else:
-            indeces = list(indeces)
-            for index in indeces:
-                self.leaves[index].orient(**kwargs)
-
-    def generatedata(self, ninputs=100, base_size=20, verbose=False, **kwargs):
-        """Generate data to be used by the neural networks.
-                base_size: number of basic types of eaten leaves to be further scaled and rotated."""
-        self.trainingdata = []
-        self.trainingdata2D = []
-        self.trainingtargets = []
-        self.trainingweights = []
-        angles = np.linspace(0., 2. * np.pi * (1. - 1. / float(ninputs)), ninputs)
-        for leaf in self.leaves:
-            leaf.generatewalks(20)
-            data, targets, weights = self.randomdata(leaf, **kwargs)
-            if verbose:
-                print "Data length:"
-                print len(data)
-            for d in data:
-                cdata = list()
-                d.curvature(self.sigma)
-                if verbose:
-                    print "Image Shape: ", d.color_image.shape
-                for a in angles:
-                    try:
-                        c = d.curvatures[d.extractpoint(a)]
-                        if np.isnan(c):
-                            if verbose:
-                                print "C IS STILL A NAN"
-                                print
-                            c = 1E9
-                        cdata.append(c)
-                    except ValueError:
-                        print "Curvature Data ValueError"
-                        print "Warning: Curvature not defined for angle %r in leaf %r" % (180. * a / np.pi, d.__name__)
-                        print "Substituting with %r instead" % leaf.__name__
-                        cdata.append(0)
-                        index = data.index(d)
-                        targets[index] = (1, 0)
-                        weights[index] = 1
-                        cdata = [leaf.curvatures[leaf.extractpoint(a)] for a in angles]
-                        break
-                self.trainingdata.append(cdata)
-                # Transpose the and reshape data to be accepted by lasagne according to (channels, height, width)
-                dimage = d.color_image.transpose(2, 0, 1)
-                dimage = dimage.reshape(1, dimage.shape[0], dimage.shape[1], dimage.shape[2])
-                if verbose:
-                    print "New Shape: ", dimage.shape
-                    print
-                self.trainingdata2D.append(dimage)
-            self.trainingtargets.extend(targets)
-            self.trainingweights.extend(weights)
-        self.trainingdata2D = np.concatenate(self.trainingdata2D, axis=0)
-        if verbose:
-            print self.trainingdata2D.shape
-        return self.trainingdata, self.trainingdata2D, self.trainingtargets, self.trainingweights
-
-    def randomdata(self, leaf, data_size=100, square_length=64, verbose=False, **kwargs):
-        """Creates a list of randomly scaled and rotated partially eaten leaves"""
-
-        if verbose:
-            print 'Random Data'
-        data = list()
-        targets = list()
-        weights = list()
-        leaf_list = list()
-        weight = list()
-        base_size = kwargs.get('base_size', 20)
-        for i in range(base_size):
-            d, w = leaf.randomwalk(**kwargs)
-            leaf_list.append(d)
-            weight.append(w)
-        size = 0
-        while size < data_size:
-            scale = 1.5 * np.random.rand() + 0.5
-            angle = 2. * np.pi * np.random.rand() - np.pi
-            index = np.random.randint(0, len(leaf_list))
-            leaf = leaf_list[index]
-
-            if not leaf.image.any():
-                if verbose:
-                    print "None, ever"
-                plt.imshow(leaf.image)
-                plt.show()
-                plt.imshow(leaf.image.astype(bool))
-                plt.show()
-                continue
-            new_leaf = tf.rotate(leaf.image, angle * 180. / np.pi, resize=True)
-            if not new_leaf.any():
-                if verbose:
-                    print "None after TF"
-                plt.imshow(new_leaf)
-                plt.show()
-                continue
-            new_leaf = imresize(new_leaf, scale, interp='bicubic')
-            if not new_leaf.any():
-                if verbose:
-                    print "None after RZ"
-                plt.imshow(new_leaf)
-                plt.show()
-                continue
-
-            leaf_c = tf.rotate(leaf.cimage, angle * 180. / np.pi, resize=True)
-            leaf_c = imresize(leaf_c, scale, interp='bicubic')
-            try:
-                ubounds = np.amax(parametrize(leaf_c), 0)
-                lbounds = np.amin(parametrize(leaf_c), 0)
-            except TypeError:
-                print "Leaf Images"
-                print "Leaf_C"
-                plt.imshow(leaf_c)
-                plt.show()
-                print "NewLeaf"
-                plt.imshow(new_leaf)
-                plt.show()
-                print
-                continue
-
-            leaf_c = parametrize(leaf_c)
-            if not new_leaf.any():
-                print leaf.__name__
-                print np.amax(leaf_c, 0)
-                print angle * 180. / np.pi
-                print scale
-                img = np.zeros(np.amax(leaf_c, 0) + 1, bool)
-                for c in leaf_c:
-                    img[c] = True
-                plt.imshow(img)
-                plt.show()
-                plt.imshow(new_leaf)
-                plt.show()
-                print
-                continue
-
-            # Crop the images to 64x64
-            shape = new_leaf.shape
-            padded = np.zeros((square_length, square_length, 3), dtype=np.uint8)
-            try:
-                for i in range(3):
-                    if shape[0] <= square_length and shape[1] <= square_length:
-                        padded[1:shape[0], 1:shape[1], i] = new_leaf[:-1, :-1]
-                    elif shape[1] < square_length + 1:
-                        padded[1:, 1:shape[1], i] = new_leaf[:square_length - 1, :]
-                    elif shape[0] < square_length + 1:
-                        padded[1:shape[0], 1:, i] = new_leaf[:, :square_length - 1]
-                    else:
-                        padded[1:, 1:, i] = new_leaf[:square_length - 1, :square_length - 1]
-            except TypeError:
-                print "Image shape: ", shape
-                raise
-            new_leaf = padded
-            try:
-                new_leaf = Leaf(new_leaf, contour=leaf_c, scale=scale, sigma=leaf.sigma, orient=False, rescale=False,
-                                name='eaten leaf %s of %s' % (size, leaf.__name__))
-            except TypeError:
-                print "TypeError"
-                print leaf.__name__
-                try:
-                    print "New Leaf.image"
-                    print new_leaf
-                    print type(new_leaf)
-                    plt.imshow(new_leaf.image)
-                    plt.show()
-                    raise
-                except AttributeError:
-                    print "New Leaf Displayed"
-                    plt.imshow(new_leaf)
-                    plt.show()
-                    raise
-                continue
-            data.append(new_leaf)
-            targets.append((scale, angle))
-            weights.append(weight[index])
-            size += 1
-        return data, targets, weights
-
-
 class LeafNetwork(object):
     def __init__(self, data1D, data2D, targets, ref_image, train_prop=0.75, num_epochs=1000, stop_err=0.01,
                  d_stable=1e-6, n_stable=10, learning_rate=0.001, beta_1=0.9, beta_2=0.999,
@@ -411,7 +120,9 @@ class LeafNetwork(object):
                                 2: Standard MLP network accepting curvature data as input. Has the same number of layers
                                 and roughly the same hyperparameters as a 1-D convolutional network with one learnable
                                 filter
-                                3: 2-D convolutional network using image data as input
+                                3: 2-D convolutional network using image data as input and scale, angle output
+                                4: 2-D convolutional network using image data as input and scale output
+                                4: 2-D convolutional network using image data as input and angle output
             :param name:    string, optional
                             what name to give the network. If specified a name is automatically constructed using
                             the hyperparameters n_conv, n_1Dfilters, n_2Dfilters, n_dense.
@@ -458,11 +169,12 @@ class LeafNetwork(object):
             new_data[i, 0, :] = data1D[i, :]
 
         # self._n_conv = n_conv
-        # self._n_conv = 3
-        self._n_conv = 2
+        self._n_conv = 4
+        # self._n_conv = 2
         # self._n_dense = n_dense
+        self._n_dense = 3
         # self._n_dense = 2
-        self._n_dense = 2
+        pretrain = False
         try:
             iter(n_1Dfilters)
         except TypeError:
@@ -477,7 +189,7 @@ class LeafNetwork(object):
         self._n_1Dfilters = [2]
         # self._n_2Dfilters = list(n_2Dfilters)
         # self._n_2Dfilters = [8]
-        self._n_2Dfilters = [2]
+        self._n_2Dfilters = [1]
 
         self.netdir = os.path.dirname(__file__)
         try:
@@ -530,6 +242,7 @@ class LeafNetwork(object):
         logfile = os.path.join(self.logdir, "create_layers.log")
         logging.basicConfig(filename=logfile, level=logging.DEBUG)
         logging.debug('Creating layers...')
+        self.layer_params = defaultdict(list)
         if nets is None:
             logging.debug('No networks specified: returning all networks.')
             self.__nets__ = [i for i in range(4)]
@@ -582,7 +295,6 @@ class LeafNetwork(object):
         pool_size = kwargs.get('pool_size', 2)
         dropout = kwargs.get('dropout', 0.5)
         filter_size = kwargs.get('filter_size', 3)
-
         if verbose:
             logging.debug('Layering networks...')
             print "Layering Networks..."
@@ -593,7 +305,7 @@ class LeafNetwork(object):
             if 3 in self.__nets__:
                 self.AE2DLayers = []
         if 0 in self.__nets__:
-            self.ConvLayers = []
+            self.Conv1DLayers = []
         if 3 in self.__nets__:
             self.Conv2DLayers = []
 
@@ -602,7 +314,7 @@ class LeafNetwork(object):
         """
         logging.debug('Creating input layers')
         if 0 in self.__nets__:
-            self.ConvLayers.append(layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var))
+            self.Conv1DLayers.append(layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var))
             if pretrain:
                 self.AELayers.append(layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var))
         if 1 in self.__nets__:
@@ -611,7 +323,7 @@ class LeafNetwork(object):
                                                                     nonlinearity=self._nonlinearity))
         if 2 in self.__nets__:
             self.DenseLayers = layers.InputLayer((None, 1, self._input1D_size), input_var=self.input_var)
-        logging.debug('1D input layers created. Creating 2D input layers...')
+            logging.debug('1D input layers created. Creating 2D input layers...')
         if 3 in self.__nets__:
             self.Conv2DLayers.append(
                 layers.InputLayer((None, self._input2D_shape[0], self._input2D_shape[1], self._input2D_shape[2]),
@@ -628,12 +340,13 @@ class LeafNetwork(object):
         if 0 in self.__nets__:
             if pretrain:
                 self.AELayers.append(layers.BatchNormLayer(self.AELayers[-1]))
-                self.ConvLayers.append(layers.BatchNormLayer(self.ConvLayers[-1], alpha=self.AELayers[-1].alpha,
-                                                             beta=self.AELayers[-1].beta, gamma=self.AELayers[-1].gamma,
-                                                             mean=self.AELayers[-1].mean,
-                                                             inv_std=self.AELayers[-1].inv_std))
+                self.Conv1DLayers.append(layers.BatchNormLayer(self.Conv1DLayers[-1], alpha=self.AELayers[-1].alpha,
+                                                               beta=self.AELayers[-1].beta,
+                                                               gamma=self.AELayers[-1].gamma,
+                                                               mean=self.AELayers[-1].mean,
+                                                               inv_std=self.AELayers[-1].inv_std))
             else:
-                self.ConvLayers.append(layers.BatchNormLayer(self.ConvLayers[-1]))
+                self.Conv1DLayers.append(layers.BatchNormLayer(self.Conv1DLayers[-1]))
         if 2 in self.__nets__:
             self.DenseLayers = layers.BatchNormLayer(self.DenseLayers)
         if 3 in self.__nets__:
@@ -658,21 +371,28 @@ class LeafNetwork(object):
                         layers.Conv1DLayer(self.AELayers[-1], num_filters=n_1Dfilters[c % len(n_1Dfilters)],
                                            filter_size=filter_size,
                                            nonlinearity=self._nonlinearity))
-                    self.ConvLayers.append(
-                        layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters[c % len(n_1Dfilters)],
+                    self.Conv1DLayers.append(
+                        layers.Conv1DLayer(self.Conv1DLayers[-1], num_filters=n_1Dfilters[c % len(n_1Dfilters)],
                                            filter_size=filter_size,
                                            W=self.AELayers[-1].W, b=self.AELayers[-1].b,
                                            nonlinearity=self._nonlinearity))
                 else:
-                    self.ConvLayers.append(
-                        layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters[c % len(n_1Dfilters)],
+                    self.Conv1DLayers.append(
+                        layers.Conv1DLayer(self.Conv1DLayers[-1], num_filters=n_1Dfilters[c % len(n_1Dfilters)],
                                            filter_size=filter_size,
                                            nonlinearity=self._nonlinearity))
+                self.layer_params["Conv1D"].append(
+                    {"type": "convolutional", "num_filters": self.Conv1DLayers[-1].num_filters,
+                     "filter_size": self.Conv1DLayers[-1].num_filters,
+                     "shape": layers.get_output_shape(self.Conv1DLayers[-1]), "stride": self.Conv1DLayers[-1].stride})
                 if 2 in self.__nets__:
                     self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout),
-                                                         num_units=layers.get_output_shape(self.ConvLayers[-1])[
+                                                         num_units=layers.get_output_shape(self.Conv1DLayers[-1])[
                                                                        -1] * self._n_1Dfilters[c % len(n_1Dfilters)],
                                                          nonlinearity=self._nonlinearity)
+                    self.layer_params["Dense"].append(
+                        {"type": "dense", "num_units": self.DenseLayers.num_units,
+                         "shape": layers.get_output_shape(self.DenseLayers)})
             if c is not 0 and 1 in self.__nets__:
                 # DConvLayers already has a convolutional layer from the batch normalization step, so skip on the first iteration.
                 self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=n_1Dfilters[c % len(n_1Dfilters)],
@@ -693,17 +413,21 @@ class LeafNetwork(object):
                         layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters[c % len(n_2Dfilters)],
                                            filter_size=filter_size,
                                            nonlinearity=self._nonlinearity))
-            logging.debug('Output shapes after convolution')
+                self.layer_params["Conv2D"].append(
+                    {"type": "convolutional", "num_filters": self.Conv2DLayers[-1].num_filters,
+                     "filter_size": self.Conv2DLayers[-1].filter_size,
+                     "shape": layers.get_output_shape(self.Conv2DLayers[-1]), "stride": self.Conv2DLayers[-1].stride})
+            logging.debug('Output shapes after convolution %s of %s' % (c, n_conv))
             if 0 in self.__nets__:
-                logging.debug("1D Conv: " + str(layers.get_output_shape(self.ConvLayers[-1])))
+                logging.debug("1D Conv: " + str(layers.get_output_shape(self.Conv1DLayers[-1])))
                 if 2 in self.__nets__:
                     logging.debug("MLP: " + str(layers.get_output_shape(self.DenseLayers)))
             if 3 in self.__nets__:
                 logging.debug("2D Conv: " + str(layers.get_output_shape(self.Conv2DLayers[-1])))
             if verbose:
-                print "Output shapes after convolution"
+                print "Output shapes after convolution %s of %s" % (c, n_conv)
                 if 0 in self.__nets__:
-                    print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                    print "1D Conv: ", layers.get_output_shape(self.Conv1DLayers[-1])
                     if 2 in self.__nets__:
                         print "MLP: ", layers.get_output_shape(self.DenseLayers)
                 if 3 in self.__nets__:
@@ -720,27 +444,41 @@ class LeafNetwork(object):
                 if 3 in self.__nets__:
                     self.AE2DLayers.append(layers.MaxPool2DLayer(self.AE2DLayers[-1], pool_size=pool_size))
             if 0 in self.__nets__:
-                self.ConvLayers.append(layers.MaxPool1DLayer(self.ConvLayers[-1], pool_size=pool_size))
+                # self.Conv1DLayers.append(layers.MaxPool1DLayer(self.Conv1DLayers[-1], pool_size=pool_size))
+                self.Conv1DLayers.append(
+                    layers.Pool1DLayer(self.Conv1DLayers[-1], pool_size=pool_size, mode='average_exc_pad'))
+                self.layer_params["Conv1D"].append(
+                    {"type": "max pooling", "pool_size": self.Conv1DLayers[-1].pool_size,
+                     "stride": self.Conv1DLayers[-1].stride,
+                     "shape": layers.get_output_shape(self.Conv1DLayers[-1])})
                 if 2 in self.__nets__:
                     self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout),
-                                                         num_units=layers.get_output_shape(self.ConvLayers[-1])[-1] *
+                                                         num_units=layers.get_output_shape(self.Conv1DLayers[-1])[-1] *
                                                                    n_1Dfilters[c % len(n_1Dfilters)],
                                                          nonlinearity=self._nonlinearity)
+                    self.layer_params["Dense"].append(
+                        {"type": "dense", "num_units": self.DenseLayers.num_units,
+                         "shape": layers.get_output_shape(self.DenseLayers)})
             if 1 in self.__nets__:
                 self.DConvLayers = layers.MaxPool1DLayer(self.DConvLayers, pool_size=pool_size)
             if 3 in self.__nets__:
                 self.Conv2DLayers.append(layers.MaxPool2DLayer(self.Conv2DLayers[-1], pool_size=pool_size))
-            logging.debug('Output shapes after pooling')
+                self.layer_params["Conv2D"].append(
+                    {"type": "max pooling", "pool_size": self.Conv2DLayers[-1].pool_size,
+                     "stride": self.Conv2DLayers[-1].stride,
+                     "shape": layers.get_output_shape(self.Conv2DLayers[-1])})
+
+            logging.debug('Output shapes after pooling layer %s of %s' % (c, n_conv))
             if 0 in self.__nets__:
-                logging.debug("1D Conv: " + str(layers.get_output_shape(self.ConvLayers[-1])))
+                logging.debug("1D Conv: " + str(layers.get_output_shape(self.Conv1DLayers[-1])))
                 if 2 in self.__nets__:
                     logging.debug("MLP: " + str(layers.get_output_shape(self.DenseLayers)))
             if 3 in self.__nets__:
                 logging.debug("2D Conv: " + str(layers.get_output_shape(self.Conv2DLayers[-1])))
             if verbose:
-                print "Output shapes after pooling"
+                print "Output shapes after pooling layer %s of %s" % (c, n_conv)
                 if 0 in self.__nets__:
-                    print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                    print "1D Conv: ", layers.get_output_shape(self.Conv1DLayers[-1])
                     if 2 in self.__nets__:
                         print "MLP: ", layers.get_output_shape(self.DenseLayers)
                 if 3 in self.__nets__:
@@ -749,8 +487,8 @@ class LeafNetwork(object):
             if pretrain and freeze_autoencoder:
                 logging.debug('Freezing weights and biases')
                 if 0 in self.__nets__:
-                    self.ConvLayers[-1].params[self.ConvLayers[-1].W].remove("trainable")
-                    self.ConvLayers[-1].params[self.ConvLayers[-1].b].remove("trainable")
+                    self.Conv1DLayers[-1].params[self.Conv1DLayers[-1].W].remove("trainable")
+                    self.Conv1DLayers[-1].params[self.Conv1DLayers[-1].b].remove("trainable")
                 if 3 in self.__nets__:
                     self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].W].remove("trainable")
                     self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].b].remove("trainable")
@@ -758,25 +496,32 @@ class LeafNetwork(object):
         """
         Last Convolutional Layers
         """
-        logging.debug('Layering final convolutional layer.')
+        logging.debug('Layering final convolutional layer %s.' % n_conv)
         if 0 in self.__nets__:
             if pretrain:
                 self.AELayers.append(
                     layers.Conv1DLayer(self.AELayers[-1], num_filters=n_1Dfilters[-1], filter_size=filter_size,
                                        nonlinearity=self._nonlinearity))
-                self.ConvLayers.append(
-                    layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters[-1], filter_size=filter_size,
+                self.Conv1DLayers.append(
+                    layers.Conv1DLayer(self.Conv1DLayers[-1], num_filters=n_1Dfilters[-1], filter_size=filter_size,
                                        W=self.AELayers[-1].W, b=self.AELayers[-1].b,
                                        nonlinearity=self._nonlinearity))
             else:
-                self.ConvLayers.append(
-                    layers.Conv1DLayer(self.ConvLayers[-1], num_filters=n_1Dfilters[-1], filter_size=filter_size,
+                self.Conv1DLayers.append(
+                    layers.Conv1DLayer(self.Conv1DLayers[-1], num_filters=n_1Dfilters[-1], filter_size=filter_size,
                                        nonlinearity=self._nonlinearity))
+            self.layer_params["Conv1D"].append(
+                {"type": "convolutional", "num_filters": self.Conv1DLayers[-1].num_filters,
+                 "filter_size": self.Conv1DLayers[-1].filter_size,
+                 "shape": layers.get_output_shape(self.Conv1DLayers[-1]), "stride": self.Conv1DLayers[-1].stride})
             if 2 in self.__nets__:
                 self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout),
-                                                     num_units=layers.get_output_shape(self.ConvLayers[-1])[-1] *
+                                                     num_units=layers.get_output_shape(self.Conv1DLayers[-1])[-1] *
                                                                n_1Dfilters[-1],
                                                      nonlinearity=self._nonlinearity)
+                self.layer_params["Dense"].append(
+                    {"type": "dense", "num_units": self.DenseLayers.num_units,
+                     "shape": layers.get_output_shape(self.DenseLayers)})
         if 3 in self.__nets__:
             if pretrain:
                 self.AE2DLayers.append(
@@ -790,22 +535,26 @@ class LeafNetwork(object):
                 self.Conv2DLayers.append(
                     layers.Conv2DLayer(self.Conv2DLayers[-1], num_filters=n_2Dfilters[-1], filter_size=filter_size,
                                        nonlinearity=self._nonlinearity))
+            self.layer_params["Conv2D"].append(
+                {"type": "convolutional", "num_filters": self.Conv2DLayers[-1].num_filters,
+                 "filter_size": self.Conv2DLayers[-1].filter_size,
+                 "shape": layers.get_output_shape(self.Conv2DLayers[-1]), "stride": self.Conv2DLayers[-1].stride})
         if 1 in self.__nets__:
             self.DConvLayers = layers.Conv1DLayer(self.DConvLayers, num_filters=n_1Dfilters[-1],
                                                   filter_size=filter_size,
                                                   nonlinearity=self._nonlinearity)
-        logging.debug('Output shapes after convolution')
+        logging.debug('Output shapes after pooling layer %s of %s' % (c + 1, n_conv))
         if 0 in self.__nets__:
-            logging.debug("1D Conv: " + str(layers.get_output_shape(self.ConvLayers[-1])))
+            logging.debug("1D Conv: " + str(layers.get_output_shape(self.Conv1DLayers[-1])))
             if 2 in self.__nets__:
                 logging.debug("MLP: " + str(layers.get_output_shape(self.DenseLayers)))
         if 3 in self.__nets__:
             logging.debug("2D Conv: " + str(layers.get_output_shape(self.Conv2DLayers[-1])))
         if verbose:
-            print "Output shapes after convolution"
+            print 'Output shapes after pooling layer %s of %s' % (c, n_conv)
             if 0 in self.__nets__:
                 logging
-                print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                print "1D Conv: ", layers.get_output_shape(self.Conv1DLayers[-1])
                 if 2 in self.__nets__:
                     print "MLP: ", layers.get_output_shape(self.DenseLayers)
             if 3 in self.__nets__:
@@ -822,27 +571,40 @@ class LeafNetwork(object):
             if 3 in self.__nets__:
                 self.AE2DLayers.append(layers.MaxPool2DLayer(self.AE2DLayers[-1], pool_size=pool_size))
         if 0 in self.__nets__:
-            self.ConvLayers.append(layers.MaxPool1DLayer(self.ConvLayers[-1], pool_size=pool_size))
+            # self.Conv1DLayers.append(layers.MaxPool1DLayer(self.Conv1DLayers[-1], pool_size=pool_size))
+            self.Conv1DLayers.append(
+                layers.Pool1DLayer(self.Conv1DLayers[-1], pool_size=pool_size, mode='average_exc_pad'))
+            self.layer_params["Conv1D"].append(
+                {"type": "max pooling", "pool_size": self.Conv1DLayers[-1].pool_size,
+                 "stride": self.Conv1DLayers[-1].stride,
+                 "shape": layers.get_output_shape(self.Conv1DLayers[-1])})
             if 2 in self.__nets__:
                 self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout),
-                                                     num_units=layers.get_output_shape(self.ConvLayers[-1])[
+                                                     num_units=layers.get_output_shape(self.Conv1DLayers[-1])[
                                                                    -1] * self._n_1Dfilters[-1],
                                                      nonlinearity=self._nonlinearity)
+                self.layer_params["Dense"].append(
+                    {"type": "dense", "num_units": self.DenseLayers.num_units,
+                     "shape": layers.get_output_shape(self.DenseLayers)})
         if 1 in self.__nets__:
             self.DConvLayers = layers.MaxPool1DLayer(self.DConvLayers, pool_size=pool_size)
         if 3 in self.__nets__:
             self.Conv2DLayers.append(layers.MaxPool2DLayer(self.Conv2DLayers[-1], pool_size=pool_size))
+            self.layer_params["Conv2D"].append(
+                {"type": "max pooling", "pool_size": self.Conv2DLayers[-1].pool_size,
+                 "stride": self.Conv2DLayers[-1].stride,
+                 "shape": layers.get_output_shape(self.Conv2DLayers[-1])})
         logging.debug('Output shapes after pooling')
         if 0 in self.__nets__:
-            logging.debug("1D Conv: " + str(layers.get_output_shape(self.ConvLayers[-1])))
+            logging.debug("1D Conv: " + str(layers.get_output_shape(self.Conv1DLayers[-1])))
             if 2 in self.__nets__:
                 logging.debug("MLP: " + str(layers.get_output_shape(self.DenseLayers)))
         if 3 in self.__nets__:
             logging.debug("2D Conv: " + str(layers.get_output_shape(self.Conv2DLayers[-1])))
         if verbose:
-            print "Output shapes after pooling"
+            print 'Output shapes after pooling layer %s of %s' % (c + 1, n_conv)
             if 0 in self.__nets__:
-                print "1D Conv: ", layers.get_output_shape(self.ConvLayers[-1])
+                print "1D Conv: ", layers.get_output_shape(self.Conv1DLayers[-1])
                 if 2 in self.__nets__:
                     print "MLP: ", layers.get_output_shape(self.DenseLayers)
             if 3 in self.__nets__:
@@ -861,8 +623,8 @@ class LeafNetwork(object):
             if freeze_autoencoder:
                 logging.debug("Freezing weights and biases")
                 if 0 in self.__nets__:
-                    self.ConvLayers[-1].params[self.ConvLayers[-1].W].remove("trainable")
-                    self.ConvLayers[-1].params[self.ConvLayers[-1].b].remove("trainable")
+                    self.Conv1DLayers[-1].params[self.Conv1DLayers[-1].W].remove("trainable")
+                    self.Conv1DLayers[-1].params[self.Conv1DLayers[-1].b].remove("trainable")
                 if 3 in self.__nets__:
                     self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].W].remove("trainable")
                     self.Conv2DLayers[-1].params[self.Conv2DLayers[-1].b].remove("trainable")
@@ -871,32 +633,43 @@ class LeafNetwork(object):
         # Dense Layer 1
         logging.debug("Layering dense layer 0 of %s" % (n_dense))
         if 0 in self.__nets__:
-            self.ConvLayers = layers.DenseLayer(layers.dropout(self.ConvLayers[-1], p=dropout),
-                                                num_units=2 * layers.get_output_shape(self.ConvLayers[-1])[-1],
-                                                nonlinearity=self._nonlinearity)
+            self.Conv1DLayers = layers.DenseLayer(layers.dropout(self.Conv1DLayers[-1], p=dropout),
+                                                  num_units=np.prod(
+                                                      layers.get_output_shape(self.Conv1DLayers[-1])[-2:]) / 2,
+                                                  nonlinearity=self._nonlinearity)
+            self.layer_params["Conv1D"].append(
+                {"type": "dense", "num_units": self.Conv1DLayers.num_units,
+                 "shape": layers.get_output_shape(self.Conv1DLayers)})
             if 2 in self.__nets__:
                 self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout),
-                                                     num_units=layers.get_output_shape(self.DenseLayers)[-1],
+                                                     num_units=layers.get_output_shape(self.DenseLayers)[-1] / 2,
                                                      nonlinearity=self._nonlinearity)
+                self.layer_params["Dense"].append(
+                    {"type": "dense", "num_units": self.DenseLayers.num_units,
+                     "shape": layers.get_output_shape(self.DenseLayers)})
         if 1 in self.__nets__:
             self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout),
-                                                 num_units=2 * layers.get_output_shape(self.DConvLayers)[-1],
+                                                 num_units=np.prod(layers.get_output_shape(self.DConvLayers)[-2:]) / 2,
                                                  nonlinearity=self._nonlinearity)
         if 3 in self.__nets__:
             self.Conv2DLayers = layers.DenseLayer(layers.dropout(self.Conv2DLayers[-1], p=dropout),
-                                                  num_units=2 * layers.get_output_shape(self.Conv2DLayers[-1])[-1],
+                                                  num_units=np.prod(
+                                                      layers.get_output_shape(self.Conv2DLayers[-1])[-3:]) / 2,
                                                   nonlinearity=self._nonlinearity)
+            self.layer_params["Conv2D"].append(
+                {"type": "dense", "num_units": self.Conv2DLayers.num_units,
+                 "shape": layers.get_output_shape(self.Conv2DLayers)})
         logging.debug('Output shapes after dense layer 0')
         if 0 in self.__nets__:
-            logging.debug("1D Conv: " + str(layers.get_output_shape(self.ConvLayers)))
+            logging.debug("1D Conv: " + str(layers.get_output_shape(self.Conv1DLayers)))
             if 2 in self.__nets__:
                 logging.debug("MLP: " + str(layers.get_output_shape(self.DenseLayers)))
         if 3 in self.__nets__:
             logging.debug("2D Conv: " + str(layers.get_output_shape(self.Conv2DLayers)))
         if verbose:
-            print "Dense output shapes"
+            print "Output shape after dense layer %s of %s" % (0, n_dense)
             if 0 in self.__nets__:
-                print "1D Conv: ", layers.get_output_shape(self.ConvLayers)
+                print "1D Conv: ", layers.get_output_shape(self.Conv1DLayers)
                 if 2 in self.__nets__:
                     print "MLP: ", layers.get_output_shape(self.DenseLayers)
             if 3 in self.__nets__:
@@ -905,13 +678,19 @@ class LeafNetwork(object):
         for d in range(n_dense - 2):
             logging.debug('Layering dense layer %s of %s' % (d + 1, n_dense))
             if 0 in self.__nets__:
-                self.ConvLayers = layers.DenseLayer(layers.dropout(self.ConvLayers, p=dropout),
-                                                    num_units=layers.get_output_shape(self.ConvLayers)[-1] / 2,
-                                                    nonlinearity=self._nonlinearity)
+                self.Conv1DLayers = layers.DenseLayer(layers.dropout(self.Conv1DLayers, p=dropout),
+                                                      num_units=layers.get_output_shape(self.Conv1DLayers)[-1] / 2,
+                                                      nonlinearity=self._nonlinearity)
+                self.layer_params["Conv1D"].append(
+                    {"type": "dense", "num_units": self.Conv1DLayers.num_units,
+                     "shape": layers.get_output_shape(self.Conv1DLayers)})
                 if 2 in self.__nets__:
                     self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout),
                                                          num_units=layers.get_output_shape(self.DenseLayers)[
                                                                        -1] / 2, nonlinearity=self._nonlinearity)
+                    self.layer_params["Dense"].append(
+                        {"type": "dense", "num_units": self.DenseLayers.num_units,
+                         "shape": layers.get_output_shape(self.DenseLayers)})
             if 1 in self.__nets__:
                 self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout),
                                                      num_units=layers.get_output_shape(self.DConvLayers)[-1] / 2,
@@ -920,17 +699,20 @@ class LeafNetwork(object):
                 self.Conv2DLayers = layers.DenseLayer(layers.dropout(self.Conv2DLayers, p=dropout),
                                                       num_units=layers.get_output_shape(self.Conv2DLayers)[-1] / 2,
                                                       nonlinearity=self._nonlinearity)
+                self.layer_params["Conv2D"].append(
+                    {"type": "dense", "num_units": self.Conv2DLayers.num_units,
+                     "shape": layers.get_output_shape(self.Conv2DLayers)})
             logging.debug('Output shapes after dense layer %s of %s' % (d + 1, n_dense))
             if 0 in self.__nets__:
-                logging.debug("1D Conv: " + str(layers.get_output_shape(self.ConvLayers)))
+                logging.debug("1D Conv: " + str(layers.get_output_shape(self.Conv1DLayers)))
                 if 2 in self.__nets__:
                     logging.debug("MLP: " + str(layers.get_output_shape(self.DenseLayers)))
             if 3 in self.__nets__:
                 logging.debug("2D Conv: " + str(layers.get_output_shape(self.Conv2DLayers)))
             if verbose:
-                print "Dense output shapes"
+                print "Output shape after dense layer %s of %s" % (d + 1, n_dense)
                 if 0 in self.__nets__:
-                    print "1D Conv: ", layers.get_output_shape(self.ConvLayers)
+                    print "1D Conv: ", layers.get_output_shape(self.Conv1DLayers)
                     if 2 in self.__nets__:
                         print "MLP: ", layers.get_output_shape(self.DenseLayers)
                 if 3 in self.__nets__:
@@ -942,20 +724,29 @@ class LeafNetwork(object):
         """
         logging.debug('Layering output layer.')
         if 0 in self.__nets__:
-            self.ConvLayers = layers.DenseLayer(layers.dropout(self.ConvLayers, p=dropout), num_units=2,
-                                                nonlinearity=self._nonlinearity)
+            self.Conv1DLayers = layers.DenseLayer(layers.dropout(self.Conv1DLayers, p=dropout), num_units=2,
+                                                  nonlinearity=self._nonlinearity)
+            self.layer_params["Conv1D"].append(
+                {"type": "dense", "num_units": self.Conv1DLayers.num_units,
+                 "shape": layers.get_output_shape(self.Conv1DLayers)})
             if 2 in self.__nets__:
                 self.DenseLayers = layers.DenseLayer(layers.dropout(self.DenseLayers, p=dropout), num_units=2,
                                                      nonlinearity=self._nonlinearity)
+                self.layer_params["Dense"].append(
+                    {"type": "dense", "num_units": self.DenseLayers.num_units,
+                     "shape": layers.get_output_shape(self.DenseLayers)})
         if 1 in self.__nets__:
             self.DConvLayers = layers.DenseLayer(layers.dropout(self.DConvLayers, p=dropout), num_units=2,
                                                  nonlinearity=self._nonlinearity)
         if 3 in self.__nets__:
             self.Conv2DLayers = layers.DenseLayer(layers.dropout(self.Conv2DLayers, p=dropout), num_units=2,
                                                   nonlinearity=self._nonlinearity)
+            self.layer_params["Conv2D"].append(
+                {"type": "dense", "num_units": self.Conv2DLayers.num_units,
+                 "shape": layers.get_output_shape(self.Conv2DLayers)})
         logging.debug('Output shapes of final dense layer')
         if 0 in self.__nets__:
-            logging.debug("1D Conv: " + str(layers.get_output_shape(self.ConvLayers)))
+            logging.debug("1D Conv: " + str(layers.get_output_shape(self.Conv1DLayers)))
             if 2 in self.__nets__:
                 logging.debug("MLP: " + str(layers.get_output_shape(self.DenseLayers)))
         if 3 in self.__nets__:
@@ -963,7 +754,7 @@ class LeafNetwork(object):
         if verbose:
             print('Output shapes of final dense layer')
             if 0 in self.__nets__:
-                print "1D Conv: ", layers.get_output_shape(self.ConvLayers)
+                print "1D Conv: ", layers.get_output_shape(self.Conv1DLayers)
                 if 2 in self.__nets__:
                     print "MLP: ", layers.get_output_shape(self.DenseLayers)
             if 3 in self.__nets__:
@@ -1045,6 +836,7 @@ class LeafNetwork(object):
         errorfile = os.path.join(self.statdir, "training_errors.csv")
         timefile = os.path.join(self.statdir, "training_times.csv")
         statfile = os.path.join(self.statdir, "training_stats.csv")
+        paramfile = os.path.join(self.statdir, "params.csv")
         num_epochs = int(num_epochs)
         # num_epochs = int(10)
         self.d_stable = d_stable
@@ -1199,6 +991,7 @@ class LeafNetwork(object):
                         epochs.update({"AE2D": i + 1})
                         flags.update({"AE2D": True})
                 if all(flags.values()):
+                    logging.debug("Exiting pretraining after $s epochs. Target epochs: %s" % (i, num_epochs))
                     break
                 if verbose:
                     print
@@ -1236,19 +1029,19 @@ class LeafNetwork(object):
         if 0 in self.__nets__:
             # Loss expression
             logging.debug('Creating loss expression for 1D convolutional network')
-            Conv1DPred = layers.get_output(self.ConvLayers)
+            Conv1DPred = layers.get_output(self.Conv1DLayers)
             Conv1DLoss = lasagne.objectives.squared_error(Conv1DPred, self.target_var)
             Conv1DLoss = Conv1DLoss.mean()
 
             # Parameters and updates
             logging.debug('Getting parameters for 1D convolutional network')
-            Conv1DParams = layers.get_all_params(self.ConvLayers, trainable=True)
+            Conv1DParams = layers.get_all_params(self.Conv1DLayers, trainable=True)
             logging.debug('Creating update rule for 1D convolutional network')
             Conv1DUpdates = lasagne.updates.adam(Conv1DLoss, Conv1DParams, beta1=beta_1, beta2=beta_2, epsilon=epsilon,
                                                  learning_rate=learning_rate)
             # Create a loss expression for validation/testing
             logging.debug('Creating loss expression for validating 1D convolutional network')
-            Conv1DTest_pred = layers.get_output(self.ConvLayers, deterministic=True)
+            Conv1DTest_pred = layers.get_output(self.Conv1DLayers, deterministic=True)
             Conv1DTest_loss = lasagne.objectives.squared_error(Conv1DTest_pred, self.target_var)
             Conv1DTest_loss = Conv1DTest_loss.mean()
 
@@ -1533,7 +1326,7 @@ class LeafNetwork(object):
             print "##" * 50
             print "##" * 50
 
-        logging.debug("Writing errors to csv file: %s" %(errorfile))
+        logging.debug("Writing errors to csv file: %s" % (errorfile))
         # header = ['Epoch']
         header = epochs.keys()
         with open(errorfile, 'wb') as errorfile:
@@ -1548,7 +1341,7 @@ class LeafNetwork(object):
                         row.append("")
                 error_writer.writerow(row)
 
-        logging.debug("Writing times to csv file: %s" %(timefile))
+        logging.debug("Writing times to csv file: %s" % (timefile))
         with open(timefile, 'wb') as timefile:
             time_writer = csv.writer(timefile, quoting=csv.QUOTE_ALL)
             time_writer.writerow(header)
@@ -1578,6 +1371,17 @@ class LeafNetwork(object):
                 stat_writer.writerow(['Autoencoder Training Time', AETrain_time])
             stat_writer.writerow(['Network Training Time', NetTrain_time])
             stat_writer.writerow(['Total Time', Total_time])
+
+        with open(paramfile, 'wb') as paramfile:
+            param_writer = csv.writer(paramfile, quoting=csv.QUOTE_ALL)
+            for key in self.layer_params.keys():
+                for l in self.layer_params[key]:
+                    row_header = ["Net"]
+                    row_header.extend(l.keys())
+                    param_writer.writerow(row_header)
+                    row = [key]
+                    row.extend(l.values())
+                    param_writer.writerow(row)
 
         if plotting or save_plots:
             logging.debug("Generating plots")
@@ -1613,6 +1417,24 @@ class LeafNetwork(object):
                     plt.savefig(figfile)
                 if plotting:
                     plt.show()
+                if 1 in self.__nets__:
+                    plt.title(
+                        fill(
+                            "1-D Convolutional Network Pretrained Vs Untrained Training and Validation Error: %r filters" % (
+                                self._n_1Dfilters[0]), 45))
+                    plt.plot(errors["Conv1D"], 'g', label='Training')
+                    plt.plot(val_errors["Conv1D"], 'b', label='Validation')
+                    plt.plot(errors["DConv"], 'k', label='Training')
+                    plt.plot(val_errors["DConv"], 'r', label='Validation')
+                    plt.xlabel("Epoch")
+                    plt.ylabel("Mean Squared Error")
+                    plt.legend()
+                    if save_plots:
+                        logging.debug("Saving plot of 1D convolutional training and validation error")
+                        figfile = os.path.join(dir, "../plots/" + name + "_1DPreTvsUnPreTconvnet.png")
+                        plt.savefig(figfile)
+                    if plotting:
+                        plt.show()
 
             if 3 in self.__nets__:
                 plt.title(
@@ -1634,7 +1456,7 @@ class LeafNetwork(object):
 
         if 0 in self.__nets__:
             self.nets.update({0: theano.function([self.input_var],
-                                                 layers.get_output(self.ConvLayers, deterministic=True),
+                                                 layers.get_output(self.Conv1DLayers, deterministic=True),
                                                  name="1D Convolutional Network")})
         if 1 in self.__nets__:
             self.nets.update({1: theano.function([self.input_var],
@@ -1649,10 +1471,10 @@ class LeafNetwork(object):
                                                  layers.get_output(self.Conv2DLayers, deterministic=True),
                                                  name="2D Convolutional Network")})
 
-        data2, target = X_train2D[:20], y_train[:20]
+        data1, data2, target = X_train[:20], X_train2D[:20], y_train[:20]
         # print "Test"
         # print "Expected: ", target
-        predictions, networks, coordinates, errors = self.solve(
+        predictions, networks, coordinates, errors = self.solve(input1D=self.shape_data1D(data1D=data1, batched=True, batch_axis=0),
             input2D=self.shape_data2D(data2, channel_axis=1, batch_axis=0, batched=True), targets=target, network_ids=3)
         # print "Predictions: ", predictions
         # print "Networks: ", networks
@@ -1816,7 +1638,7 @@ class LeafNetwork(object):
             raise ValueError("Image pixel values are outside accepted range. Min value %r must be nonnegative" % (n))
         return reshaped
 
-    def shape_data1D(self, data1D=None, batched=False, batch_axis=0):
+    def shape_data1D(self, data1D=None, channel_axis=1, batched=False, batch_axis=0):
         """
         Shapes data to proper dimensions by rearranging curvature dimension, batch dimension, etc. Also dumps data to a data file for later use.
         :param data1D: ndarray, optional
@@ -1833,6 +1655,9 @@ class LeafNetwork(object):
             data1D = cPickle.load(open(os.path.join(self.datadir, "data1D.pkl"), "rb"))
 
         assert len(data1D.shape) <= 3, "Data has too many dimensions. Unsure how to reshape."
+
+        if channel_axis is None:
+            channel_axis = np.argmin(data1D.shape)
 
         if batch_axis is None:
             batched = True
@@ -2050,7 +1875,7 @@ class LeafNetwork(object):
                 if network_ids[id] in [0, 1, 2]:
                     batch_prediction = self.nets[network_ids[id]](input1D)
                     predictions[:, id, :] = [self.to_output(sample) for sample in batch_prediction]
-                elif network_ids[id] in [3]:
+                elif network_ids[id] in [3, 4, 5]:
                     batch_prediction = self.nets[network_ids[id]](input2D)
                     predictions[:, id, :] = [self.to_output(sample) for sample in batch_prediction]
             if targets is not None:
@@ -2079,29 +1904,37 @@ class LeafNetwork(object):
                 raise
             for i in range(batch_size):
                 scale = np.mean(predictions[i, :, 0])
-                scales = np.linspace(max(sys.float_info.epsilon, scale - .2), scale + .2, 10)
+                print "scale predictions"
+                print predictions[i, :, 0]
+                # scales = np.linspace(max(sys.float_info.epsilon, scale - .2), scale + .2, 10)
+                print "Angle predictions"
+                print predictions[i, :, 1]
                 angle = np.mean(predictions[i, :, 1])
-                angles = np.linspace(angle - 0.2 * np.pi, angle + 0.2 * np.pi, 10)
-                accumulator = general_hough_closure(self.ref_image, angles=angles, scales=scales, show_progress=False)
-                acc_array, scales, angles = accumulator(input2D[i])
-                y, x, s, a = np.unravel_index(acc_array.argmax(), acc_array.shape)
-                dy, dx = y, x
+                # angles = np.linspace(angle
+                #                      - 0.2 * np.pi, angle + 0.2 * np.pi, 10)
+                # accumulator = general_hough_closure(self.ref_image, angles=angles, scales=scales, show_progress=False)
+                # acc_array, scales, angles = accumulator(input2D[i])
+                # y, x, s, a = np.unravel_index(acc_array.argmax(), acc_array.shape)
+                # dy, dx = y, x
                 # coordinates.append((dy, dx, scales[s], angles[a]))
-                coordinates.append((y, x, scales[s], angles[a]))
-                print "Coordinates"
-                print coordinates
-                filename = "feedback_" + str(i) + "_" + str(dy) + "_" + str(dx) + "_" + str(
-                    angles[a] * 180. / np.pi) + "_" + str(scales[s]) + ".png"
+                # coordinates.append((y, x, scales[s], angles[a]))
+                # print "Coordinates"
+                # print coordinates
+                # filename = "feedback_" + str(i) + "_" + str(dy) + "_" + str(dx) + "_" + str(
+                #     angles[a] * 180. / np.pi) + "_" + str(scales[s]) + ".png"
+                filename = "feedback_" + str(i) + "_" + str(angle) + "_" + str(scale) + ".png"
 
                 overlay = np.copy(self.ref_image)
-                overlay = zoom(overlay, scales[s])
-                overlay = rotate(overlay, angles[a], reshape=False)
-                overlay = shift(overlay, (dy, dx))
-                y_crop = slice(max(0, overlay.shape[0]/2-self._input2D_shape[0]/2), max(overlay.shape[0]/2+self._input2D_shape[0]/2, overlay.shape[0]))
-                x_crop = slice(max(0, overlay.shape[1]/2-self._input2D_shape[1]/2), max(overlay.shape[1]/2+self._input2D_shape[1]/2, overlay.shape[1]))
+                # overlay = zoom(overlay, scales[s])
+                overlay = zoom(overlay, scale)
+                # overlay = rotate(overlay, angles[a], reshape=False)
+                overlay = rotate(overlay, angle, reshape=False)
+                # overlay = shift(overlay, (dy, dx))
+                # y_crop = slice(max(0, overlay.shape[0]/2-self._input2D_shape[0]/2), max(overlay.shape[0]/2+self._input2D_shape[0]/2, overlay.shape[0]))
+                # x_crop = slice(max(0, overlay.shape[1]/2-self._input2D_shape[1]/2), max(overlay.shape[1]/2+self._input2D_shape[1]/2, overlay.shape[1]))
                 print "Overlay shape"
                 print overlay.shape
-                overlay = overlay[y_crop, x_crop]
+                # overlay = overlay[y_crop, x_crop]
                 print overlay.shape
                 plt.imshow(overlay, alpha=0.5)
                 original = np.copy(input2D[i])
@@ -2113,6 +1946,11 @@ class LeafNetwork(object):
                 # print coordinates[-1][2]
                 # print coordinates[-1][3]
                 plt.savefig(os.path.join(self.feedbackdir, filename))
+                plt.clf()
+                f, axarr = plt.subplots(2)
+                axarr[0].imshow(original)
+                axarr[1].imshow(overlay)
+                plt.savefig(os.path.join(self.feedbackdir, "subplots" + filename))
                 plt.clf()
         if verbose:
             print "Done"
@@ -2141,484 +1979,6 @@ class LeafNetwork(object):
             return predictions, networks, coordinates
         else:
             return predictions, networks, coordinates, errors
-
-
-class Contour(object):
-    def __init__(self, contour, sigma=1., scale=1., rescale=False, **kwargs):
-        self.contour = contour
-        self.rows, self._cols = zip(*contour)
-        self.sigma = sigma
-        self.scale = scale
-        self.cimage = self.contourtoimg(rescale=rescale).astype(bool)
-        self.curvature(sigma=self._sigma)
-
-    def __iter__(self):
-        return iter(self._contour)
-
-    @property
-    def sigma(self):
-        return self._sigma
-
-    @sigma.setter
-    def sigma(self, sigma):
-        self._sigma = sigma
-
-    @property
-    def rows(self):
-        return self._rows
-
-    @rows.setter
-    def rows(self, rows):
-        self._rows = rows
-        self._contour = zip(rows, self.cols)
-
-    @property
-    def cols(self):
-        return self._cols
-
-    @cols.setter
-    def cols(self, cols):
-        self._cols = cols
-        self._contour = zip(self._rows, cols)
-
-    @property
-    def contour(self):
-        return self._contour
-
-    @contour.setter
-    def contour(self, contour):
-        self._contour = contour
-        self._rows, self._cols = zip(*contour)
-
-    @property
-    def curvatures(self):
-        return self._curvatures
-
-    @property
-    def centroid(self):
-        return self._centroid
-
-    @centroid.setter
-    def centroid(self, value):
-        self._centroid = (value[0], value[1])
-
-    @property
-    def smooth_contour(self):
-        return self._smooth_contour
-
-    @property
-    def angles(self):
-        return self._angles
-
-    @angles.setter
-    def angles(self, angles):
-        self._angles = list(angles)
-
-    @property
-    def __len__(self):
-        return len(self._contour)
-
-    def getangles(self, smoothed=False, sigma=1.):
-        '''Calculates the angle from the centroid to each edge pixel'''
-        '''Returns the list of angles to pixel locations for the leaf at index. If no index is specified, returns a list containing the lists of angles for each leaf'''
-        self.findcentroid()
-        self.getradii(smoothed=smoothed, sigma=sigma)
-        if smoothed:
-            length = len(self._smooth_rows)
-            ts = np.arcsin([float(self._centroid[0] - self._smooth_rows[_]) / self._radii[_] for _ in range(length)])
-            tc = np.arccos([float(self._smooth_cols[_] - self._centroid[1]) / self._radii[_] for _ in range(length)])
-        else:
-            length = len(self.contour)
-            ts = np.arcsin([float(self._centroid[0] - self._rows[_]) / self._radii[_] for _ in range(length)])
-            tc = np.arccos([float(self._cols[_] - self._centroid[1]) / self._radii[_] for _ in range(length)])
-        thetas = []
-        for j in range(length):
-            if ts[j] < 0 and tc[j] > np.pi / 2.:
-                thetas.append(2. * np.pi - tc[j])
-            elif ts[j] < 0:
-                thetas.append(2. * np.pi + ts[j])
-            else:
-                thetas.append(tc[j])
-        self._angles = thetas
-        return self._angles
-
-    @property
-    def radii(self):
-        return self._radii
-
-    @radii.setter
-    def radii(self, radii):
-        self._radii = list(radii)
-
-    @property
-    def scale(self):
-        return self._scale
-
-    @scale.setter
-    def scale(self, scale):
-        self._scale = scale
-
-    @property
-    def cimage(self):
-        return self._cimage
-
-    @cimage.setter
-    def cimage(self, img):
-        self._cimage = img
-
-    @cimage.deleter
-    def cimage(self):
-        del self._cimage
-
-    def curvature(self, sigma=1., **kwargs):
-        '''Computes the curvature at each point along the edge'''
-        self._sigma = sigma
-
-        x = [float(x) for x in self._cols]
-        y = [float(y) for y in self._rows]
-
-        xu = gaussian_filter1d(x, self._sigma, order=1, mode='wrap')
-        yu = gaussian_filter1d(y, self._sigma, order=1, mode='wrap')
-
-        xuu = gaussian_filter1d(xu, self._sigma, order=1, mode='wrap')
-        yuu = gaussian_filter1d(yu, self._sigma, order=1, mode='wrap')
-
-        k = [(xu[i] * yuu[i] - yu[i] * xuu[i]) / np.power(xu[i] ** 2. + yu[i] ** 2., 1.5) for i in range(len(xu))]
-        self._curvatures = k
-
-        if kwargs.get('visualize', False):
-            plt.plot(k)
-            plt.show()
-        return k
-
-    def extractpoint(self, theta, **kwargs):
-        '''Finds the index of the point with an angle closest to theta'''
-        self.getangles(**kwargs)
-        diff = list(np.abs(self.angles[:] - theta))
-        return diff.index(np.min(diff))
-
-    def findcentroid(self):
-        self._centroid = (int(np.mean(self._rows)), int(np.mean(self._cols)))
-        return self._centroid
-
-    def getradii(self, smoothed=False, sigma=1.):
-        self.smooth(sigma)
-        if smoothed:
-            self._radii = [np.sqrt((self._smooth_rows[_] - float(self._centroid[0])) ** 2. + (
-                self._smooth_cols[_] - float(self._centroid[1])) ** 2.) for _ in range(self._smooth_len)]
-        else:
-            self._radii = [np.sqrt(float(
-                (self._rows[_] - float(self._centroid[0])) ** 2. + (self._cols[_] - float(self._centroid[1])) ** 2.))
-                           for _ in range(len(self._contour))]
-        return self._radii
-
-    def orient(self, smoothed=True, sigma=1., **kwargs):
-        visualize = kwargs.get('visualize', False)
-        rescale = kwargs.get('rescale', True)
-        resize = kwargs.get('resize', True)
-        preserve_range = kwargs.get('preserve_range', True)
-        if visualize:
-            print "Before Orientation"
-            cols = int(1.1 * np.max(self._cols))
-            rows = int(1.1 * np.max(self._rows))
-            shape = (rows, cols)
-            img = np.zeros(shape, bool)
-
-            for c in self._contour:
-                img[c] = True
-            plt.imshow(img)
-            plt.show()
-        self.curvature(sigma=sigma, **kwargs)
-        # Retrieve index of highest curvature point. Rotate curve
-        index = self._curvatures.index(np.max(self._curvatures))
-        angles = self.getangles(smoothed=smoothed, sigma=sigma)
-        angle = angles[index]
-        length = self.__len__
-        angles = angles - angle + np.pi / 2.
-        self._angles = angles
-        curve = [(self._radii[_] * np.sin(self._angles[_]), self._radii[_] * np.cos(self._angles[_])) for _ in
-                 range(length)]
-        dimspan = np.ptp(curve, 0)
-        dimmax = np.amax(curve, 0)
-        centroid = (dimmax[0] + dimspan[0] / 2, dimmax[1] + dimspan[1] / 2)
-        curve = [(c[0] + centroid[0], c[1] + centroid[1]) for c in curve]
-
-        self.cimage = tf.rotate(self.cimage, -angle * 180. / np.pi + 90., resize=True).astype(bool)
-        self.cimage, scale, contour = iso_leaf(self.cimage, True)
-        self.image = tf.rotate(self.image, -angle * 180. / np.pi + 90., resize=True)
-        self.image = imresize(self.image, scale, interp="bicubic")
-        self.scale *= scale
-        curve1 = parametrize(self.cimage)
-        length = len(curve)
-        curve = [curve[(index + _) % length] for _ in range(length)]
-        c1img = np.zeros_like(self.cimage)
-        for c in curve1:
-            c1img[c] = True
-        self.cimage = c1img
-        self.getangles(smoothed=smoothed, sigma=sigma)
-        self.smooth(sigma=sigma)
-        self.curvature(sigma=sigma)
-
-        if visualize:
-            print "After Orientation"
-            shape = (2 * self.centroid[0], 2 * self.centroid[1])
-            img = np.zeros(shape, bool)
-            for c in self._contour:
-                img[c] = True
-            plt.imshow(img)
-            plt.show()
-            print '-' * 40
-            print
-
-    def plot(self, smoothed=False):
-        if not smoothed:
-            rowmax, colmax = np.max(self.rows), np.max(self.cols)
-        else:
-            rowmax, colmax = np.max(self.smooth_rows), np.max(self.smooth_cols)
-
-        img = np.zeros((rowmax + 1, colmax + 1), bool)
-        for c in self._contour:
-            img[c] = True
-        plt.imshow(img)
-        plt.show()
-
-    def smooth(self, sigma=1.):
-        self._sigma = sigma
-        self._smooth_rows = tuple(gaussian_filter1d(self._rows, self._sigma, order=0, mode='wrap'))
-        self._smooth_cols = tuple(gaussian_filter1d(self._cols, self._sigma, order=0, mode='wrap'))
-        self._smooth_contour = zip(self._smooth_rows, self._smooth_cols)
-        self._smooth_len = len(self._smooth_contour)
-        return self._smooth_contour
-
-    def contourtoimg(self, contour=None, shape=(64, 64), rescale=False):
-        """Generate an image from a contour.
-                contour: the contour from which the image is to be generated. If none is specified then use self.contour
-                shape: tuple of ints specifying the image shape
-                rescale: rescale the image to shape"""
-        if contour is None:
-            cont = self.contour
-        else:
-            cont = contour
-
-        ubounds = np.amax(cont, 0)
-
-        img = np.zeros(ubounds[:] + 1, bool)
-
-        if len(cont) > 0 or min(np.ptp(cont, 0)) > 1:
-            for c in cont:
-                img[c] = True
-        else:
-            raise ValueError('contour has no length')
-        img, scale, cont = iso_leaf(img, True, square_length=max(shape), rescale=rescale)
-        cont = parametrize(img)
-        img = np.zeros_like(img)
-        for c in cont:
-            img[c] = True
-        if contour is None:
-            self.cimage = img
-            self.contour = cont
-        return img.astype(bool)
-
-
-class Leaf(Contour):
-    def __init__(self, image, contour=None, img_from_contour=False, orient=True, rescale=False, sigma=1., **kwargs):
-        smoothed = kwargs.get('smoothed', False)
-        self.__name__ = kwargs.get('name', 'Leaf')
-        if contour is None:
-            if type(image) is list:
-                super(Leaf, self).__init__(image, sigma=sigma, rescale=rescale, name=self.__name__)
-            else:
-                if len(image.shape) == 3:
-                    if np.issubdtype(np.max(image), int):
-                        print "NumPy subdtype int"
-                        print np.issubdtype(np.max(image, int))
-                        self.color_image = image / 256.
-                    elif np.issubdtype(np.max(image), float):
-                        print "NumPy subdtype float"
-                        print np.issubdtype(np.max(image, float))
-                        self.color_image = image
-                    image = rgb_to_grey(image)
-                else:
-                    self.color_image = np.zeros((image.shape[0], image.shape[1], 3), dtype=np.float32)
-                    self.color_image[:, :, 0] = image / 256.
-                    self.color_image[:, :, 1] = image / 256.
-                    self.color_image[:, :, 2] = image / 256.
-                img = image.astype(bool)
-                plt.imshow(img.astype(bool))
-                plt.show()
-                super(Leaf, self).__init__(parametrize(img), sigma=sigma, rescale=rescale, name=self.__name__)
-                self.image = image
-        else:
-            if len(image.shape) == 3:
-                self.color_image = image / 256.
-                image = rgb_to_grey(image)
-            else:
-                self.color_image = np.zeros((image.shape[0], image.shape[1], 3), dtype=np.float32)
-                self.color_image[:, :, 0] = image / 256.
-                self.color_image[:, :, 1] = image / 256.
-                self.color_image[:, :, 2] = image / 256.
-            self.image = image
-            super(Leaf, self).__init__(contour, sigma=sigma, rescale=rescale, name=self.__name__)
-
-        if img_from_contour:
-            # Create images from the given contour
-            self.image = self.contourtoimg(contour, shape=kwargs.get('shape', (64, 64)), rescale=rescale)
-            self.color_image = np.zeros((self.image.shape[0], self.image.shape[1], 3), dtype=np.float32)
-            self.color_image[:, :, 0] = self.image
-            self.color_image[:, :, 1] = self.image
-            self.color_image[:, :, 2] = self.image
-
-        self.smooth(sigma=sigma)
-        self.curvature(**kwargs)
-        self.getangles(smoothed=smoothed, sigma=sigma)
-
-        if orient:
-            self.orient(smoothed=True, sigma=sigma, **kwargs)
-        self.data = list()
-        self.curvature(**kwargs)
-        self.getangles(smoothed=smoothed, sigma=sigma)
-
-    def __iter__(self):
-        return iter(self.contour)
-
-    @property
-    def __len__(self):
-        return len(self.contour)
-
-    @property
-    def image(self):
-        return self._image
-
-    @image.setter
-    def image(self, img):
-        self._image = img
-
-    def distance(self, p0, p1):
-        '''Euclidean distance between pixel 0 and pixel 1'''
-        return np.sqrt(float(p0[0] - p1[0]) ** 2. + float(p0[1] - p1[1]) ** 2.)
-
-    def pixelwalk(self, sigma, walk_length=256):
-        pixel = np.array((0, 0))
-        plist = [pixel]
-        bias = random.randint(-1, 1)
-        while pixel[1] < walk_length:
-            nx = -4. * np.arctan2(pixel[0], walk_length - pixel[1]) / (np.pi) + 4.5
-            nx = np.log(nx / (8. - nx))
-            nx = random.gauss(nx, sigma * random.betavariate(2, 5))
-            nx = np.array(convert(bias + 8. / (1. + np.exp(-nx))))
-            plist.append(plist[-1] + nx)
-            pixel += nx
-        plist.pop(0)
-        return plist
-
-    def generatewalks(self, num_walks=10):
-        '''Randomly generates walks up to num_walks'''
-        self.walks = [self.pixelwalk(4. * np.random.rand(), 128) for _ in range(num_walks)]
-
-    def randomwalk(self, default_freq=0.1, verbose=False, min_length=10):
-        """Start a random walk at a random point along the edge of the leaf until it intersects with the leaf again.
-                default_freq: Frequency at which completely uneaten leaves should appear
-                verbose: print debug statements
-                min_length: minimum contour length required to be considered valid"""
-        size = np.ceil(1. / default_freq)
-        i = 0
-        if np.random.randint(0, size) == 0:
-            if verbose:
-                print "Returning self"
-            return self, 1.
-        while True:
-            i += 1
-            length = len(self.contour)
-            t = np.random.randint(0, length / 2)
-            p0 = np.asarray(self.contour[-t]).astype(int)
-            windex = np.random.randint(0, len(self.walks))
-            walk = self.walks[windex]
-            L = [p0 + _ for _ in walk]
-            L.insert(0, p0)
-            L = [tuple(_) for _ in L]
-            f = lambda x: (x in self.contour) and (x != list(p0))
-            g = lambda x: (x[0] < 0) or (x[1] < 0)
-
-            out_of_bounds = map(g, L)
-            if any(out_of_bounds):
-                if verbose: print "Out of bounds"
-                continue
-            try:
-                filtered = filter(f, L)
-                index = self.contour.index(filtered[-1])
-            except IndexError:
-                if verbose: print "Walk does not intersect leaf"
-                continue
-
-            if index > length - t:
-                # Short Walk
-                windex = L.index(filtered[-1])
-                new = self.contour[:-t]
-                img = np.copy(self.image)
-                for p in L[:windex]:
-                    img[:p[0], p[1]] = 0.
-                l = L[:windex]
-                img[:l[-1][0], :l[-1][1]] = 0.
-                img[:l[0][0], :l[0][1]] = 0.
-                new.extend(L[:windex])
-                new.extend(self.contour[index:])
-
-            else:
-                # Long Walk
-                new = self.contour[:index]
-                L.reverse()
-                windex = L.index(filtered[-1])
-                img = np.copy(self.image)
-                for p in L[windex:]:
-                    img[p[0]:, p[1]] = 0.
-                l = L[windex:]
-                img[l[-1][0]:, :l[-1][1]] = 0.
-                img[l[0][0]:, l[0][1]:] = 0.
-                new.extend(L[windex:])
-                new.extend(self.contour[-t:])
-            if len(new) < min_length:
-                continue
-            break
-        weight = float(len(new)) / float(length)
-        return Leaf(img, contour=new, scale=self.scale, img_from_contour=True, sigma=self.sigma, orient=False,
-                    name=self.__name__, rescale=False), weight
-
-    def randomdata(self, base_size=20, data_size=100, **kwargs):
-        """Creates a list of randomly scaled and rotated partially eaten leaves.
-                base_size: number of unique random walks to perform
-                data_size: number of inputs to the network"""
-        data = list()
-        target = list()
-        weights = list()
-        leaves = list()
-        weight = list()
-        for i in range(base_size):
-            leaf, w = self.randomwalk(verbose=True)
-            leaves.append(leaf)
-            weight.append(w)
-
-        size = 0
-        while size < data_size:
-            scale = 1.5 * np.random.rand() + 0.5
-            random.jumpahead(size)
-            angle = 2. * np.pi * np.random.rand() - np.pi
-            index = np.random.randint(0, len(leaves))
-            leaf = leaves[index]
-            w = weight[index]
-            new_leaf = tf.rotate(leaf.image, angle * 180. / np.pi, resize=True, interp='bicubic')
-            new_leaf = imresize(new_leaf, scale, interp='bicubic')
-            new_leaf = new_leaf[:64, :64]
-            leaf_c = tf.rotate(leaf.cimage, angle * 180. / np.pi, resize=True, interp='bicubic')
-            leaf_c = imresize(leaf_c, scale, interp='bicubic')
-
-            new_leaf = Leaf(new_leaf, contour=parametrize(leaf_c), scale=scale, sigma=self.sigma, orient=False,
-                            name='eaten leaf %r of %r' % (size, self.__name__), rescale=False)
-
-            data.append(new_leaf)
-            target.append((scale, angle))
-            weights.append(w)
-            size += 1
-        return data, target, weights
 
 
 def test(pickled):
@@ -2694,6 +2054,7 @@ def test(pickled):
         cPickle.dump(LeafNet, open("netdump.pkl", "wb"))
         print "Done"
         pickled = True
+
 
 if __name__ == '__main__':
     pickled = True

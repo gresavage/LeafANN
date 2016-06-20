@@ -10,6 +10,283 @@ from skimage import transform as tf
 # Kernel for erosion and dilation
 se = np.ones((3,3))
 
+class Contour(object):
+    def __init__(self, contour, sigma=1., scale=1., rescale=False, **kwargs):
+        self.contour = contour
+        self.rows, self._cols = zip(*contour)
+        self.sigma = sigma
+        self.scale = scale
+        self.cimage = self.contourtoimg(rescale=rescale).astype(bool)
+        self.curvature(sigma=self._sigma)
+
+    def __iter__(self):
+        return iter(self._contour)
+
+    @property
+    def sigma(self):
+        return self._sigma
+
+    @sigma.setter
+    def sigma(self, sigma):
+        self._sigma = sigma
+
+    @property
+    def rows(self):
+        return self._rows
+
+    @rows.setter
+    def rows(self, rows):
+        self._rows = rows
+        self._contour = zip(rows, self.cols)
+
+    @property
+    def cols(self):
+        return self._cols
+
+    @cols.setter
+    def cols(self, cols):
+        self._cols = cols
+        self._contour = zip(self._rows, cols)
+
+    @property
+    def contour(self):
+        return self._contour
+
+    @contour.setter
+    def contour(self, contour):
+        self._contour = contour
+        self._rows, self._cols = zip(*contour)
+
+    @property
+    def curvatures(self):
+        return self._curvatures
+
+    @property
+    def centroid(self):
+        return self._centroid
+
+    @centroid.setter
+    def centroid(self, value):
+        self._centroid = (value[0], value[1])
+
+    @property
+    def smooth_contour(self):
+        return self._smooth_contour
+
+    @property
+    def angles(self):
+        return self._angles
+
+    @angles.setter
+    def angles(self, angles):
+        self._angles = list(angles)
+
+    @property
+    def __len__(self):
+        return len(self._contour)
+
+    def getangles(self, smoothed=False, sigma=1.):
+        '''Calculates the angle from the centroid to each edge pixel'''
+        '''Returns the list of angles to pixel locations for the leaf at index. If no index is specified, returns a list containing the lists of angles for each leaf'''
+        self.findcentroid()
+        self.getradii(smoothed=smoothed, sigma=sigma)
+        if smoothed:
+            length = len(self._smooth_rows)
+            ts = np.arcsin([float(self._centroid[0] - self._smooth_rows[_]) / self._radii[_] for _ in range(length)])
+            tc = np.arccos([float(self._smooth_cols[_] - self._centroid[1]) / self._radii[_] for _ in range(length)])
+        else:
+            length = len(self.contour)
+            ts = np.arcsin([float(self._centroid[0] - self._rows[_]) / self._radii[_] for _ in range(length)])
+            tc = np.arccos([float(self._cols[_] - self._centroid[1]) / self._radii[_] for _ in range(length)])
+        thetas = []
+        for j in range(length):
+            if ts[j] < 0 and tc[j] > np.pi / 2.:
+                thetas.append(2. * np.pi - tc[j])
+            elif ts[j] < 0:
+                thetas.append(2. * np.pi + ts[j])
+            else:
+                thetas.append(tc[j])
+        self._angles = thetas
+        return self._angles
+
+    @property
+    def radii(self):
+        return self._radii
+
+    @radii.setter
+    def radii(self, radii):
+        self._radii = list(radii)
+
+    @property
+    def scale(self):
+        return self._scale
+
+    @scale.setter
+    def scale(self, scale):
+        self._scale = scale
+
+    @property
+    def cimage(self):
+        return self._cimage
+
+    @cimage.setter
+    def cimage(self, img):
+        self._cimage = img
+
+    @cimage.deleter
+    def cimage(self):
+        del self._cimage
+
+    def curvature(self, sigma=1., **kwargs):
+        '''Computes the curvature at each point along the edge'''
+        self._sigma = sigma
+
+        x = [float(x) for x in self._cols]
+        y = [float(y) for y in self._rows]
+
+        xu = gaussian_filter1d(x, self._sigma, order=1, mode='wrap')
+        yu = gaussian_filter1d(y, self._sigma, order=1, mode='wrap')
+
+        xuu = gaussian_filter1d(xu, self._sigma, order=1, mode='wrap')
+        yuu = gaussian_filter1d(yu, self._sigma, order=1, mode='wrap')
+
+        k = [(xu[i] * yuu[i] - yu[i] * xuu[i]) / np.power(xu[i] ** 2. + yu[i] ** 2., 1.5) for i in range(len(xu))]
+        self._curvatures = k
+
+        if kwargs.get('visualize', False):
+            plt.plot(k)
+            plt.show()
+        return k
+
+    def extractpoint(self, theta, **kwargs):
+        '''Finds the index of the point with an angle closest to theta'''
+        self.getangles(**kwargs)
+        diff = list(np.abs(self.angles[:] - theta))
+        return diff.index(np.min(diff))
+
+    def findcentroid(self):
+        self._centroid = (int(np.mean(self._rows)), int(np.mean(self._cols)))
+        return self._centroid
+
+    def getradii(self, smoothed=False, sigma=1.):
+        self.smooth(sigma)
+        if smoothed:
+            self._radii = [np.sqrt((self._smooth_rows[_] - float(self._centroid[0])) ** 2. + (
+                self._smooth_cols[_] - float(self._centroid[1])) ** 2.) for _ in range(self._smooth_len)]
+        else:
+            self._radii = [np.sqrt(float(
+                (self._rows[_] - float(self._centroid[0])) ** 2. + (self._cols[_] - float(self._centroid[1])) ** 2.))
+                           for _ in range(len(self._contour))]
+        return self._radii
+
+    def orient(self, smoothed=True, sigma=1., **kwargs):
+        visualize = kwargs.get('visualize', False)
+        rescale = kwargs.get('rescale', True)
+        resize = kwargs.get('resize', True)
+        preserve_range = kwargs.get('preserve_range', True)
+        if visualize:
+            print "Before Orientation"
+            cols = int(1.1 * np.max(self._cols))
+            rows = int(1.1 * np.max(self._rows))
+            shape = (rows, cols)
+            img = np.zeros(shape, bool)
+
+            for c in self._contour:
+                img[c] = True
+            plt.imshow(img)
+            plt.show()
+        self.curvature(sigma=sigma, **kwargs)
+        # Retrieve index of highest curvature point. Rotate curve
+        index = self._curvatures.index(np.max(self._curvatures))
+        angles = self.getangles(smoothed=smoothed, sigma=sigma)
+        angle = angles[index]
+        length = self.__len__
+        angles = angles - angle + np.pi / 2.
+        self._angles = angles
+        curve = [(self._radii[_] * np.sin(self._angles[_]), self._radii[_] * np.cos(self._angles[_])) for _ in
+                 range(length)]
+        dimspan = np.ptp(curve, 0)
+        dimmax = np.amax(curve, 0)
+        centroid = (dimmax[0] + dimspan[0] / 2, dimmax[1] + dimspan[1] / 2)
+        curve = [(c[0] + centroid[0], c[1] + centroid[1]) for c in curve]
+
+        self.cimage = tf.rotate(self.cimage, -angle * 180. / np.pi + 90., resize=True).astype(bool)
+        self.cimage, scale, contour = iso_leaf(self.cimage, True)
+        self.image = tf.rotate(self.image, -angle * 180. / np.pi + 90., resize=True)
+        self.image = imresize(self.image, scale, interp="bicubic")
+        self.scale *= scale
+        curve1 = parametrize(self.cimage)
+        length = len(curve)
+        curve = [curve[(index + _) % length] for _ in range(length)]
+        c1img = np.zeros_like(self.cimage)
+        for c in curve1:
+            c1img[c] = True
+        self.cimage = c1img
+        self.getangles(smoothed=smoothed, sigma=sigma)
+        self.smooth(sigma=sigma)
+        self.curvature(sigma=sigma)
+
+        if visualize:
+            print "After Orientation"
+            shape = (2 * self.centroid[0], 2 * self.centroid[1])
+            img = np.zeros(shape, bool)
+            for c in self._contour:
+                img[c] = True
+            plt.imshow(img)
+            plt.show()
+            print '-' * 40
+            print
+
+    def plot(self, smoothed=False):
+        if not smoothed:
+            rowmax, colmax = np.max(self.rows), np.max(self.cols)
+        else:
+            rowmax, colmax = np.max(self.smooth_rows), np.max(self.smooth_cols)
+
+        img = np.zeros((rowmax + 1, colmax + 1), bool)
+        for c in self._contour:
+            img[c] = True
+        plt.imshow(img)
+        plt.show()
+
+    def smooth(self, sigma=1.):
+        self._sigma = sigma
+        self._smooth_rows = tuple(gaussian_filter1d(self._rows, self._sigma, order=0, mode='wrap'))
+        self._smooth_cols = tuple(gaussian_filter1d(self._cols, self._sigma, order=0, mode='wrap'))
+        self._smooth_contour = zip(self._smooth_rows, self._smooth_cols)
+        self._smooth_len = len(self._smooth_contour)
+        return self._smooth_contour
+
+    def contourtoimg(self, contour=None, shape=(64, 64), rescale=False):
+        """Generate an image from a contour.
+                contour: the contour from which the image is to be generated. If none is specified then use self.contour
+                shape: tuple of ints specifying the image shape
+                rescale: rescale the image to shape"""
+        if contour is None:
+            cont = self.contour
+        else:
+            cont = contour
+
+        ubounds = np.amax(cont, 0)
+
+        img = np.zeros(ubounds[:] + 1, bool)
+
+        if len(cont) > 0 or min(np.ptp(cont, 0)) > 1:
+            for c in cont:
+                img[c] = True
+        else:
+            raise ValueError('contour has no length')
+        img, scale, cont = iso_leaf(img, True, square_length=max(shape), rescale=rescale)
+        cont = parametrize(img)
+        img = np.zeros_like(img)
+        for c in cont:
+            img[c] = True
+        if contour is None:
+            self.cimage = img
+            self.contour = cont
+        return img.astype(bool)
+
+
 def curvature(contour, sigma=1., **kwargs):
     """
     Computes the curvature at each point along the edge of a contour
